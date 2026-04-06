@@ -1,0 +1,6 @@
+.env
+.pids/
+data/
+
+# Internal planning docs
+docs/livelapse-spec.md

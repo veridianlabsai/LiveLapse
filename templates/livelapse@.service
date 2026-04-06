@@ -1,0 +1,16 @@
+[Unit]
+Description=LiveLapse capture for %i
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=__LIVELAPSE_ROOT__
+ExecStart=__LIVELAPSE_ROOT__/bin/capture.sh %i
+Restart=always
+RestartSec=15
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
