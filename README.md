@@ -11,6 +11,14 @@ No database. No cloud dependency. No moving parts beyond a shell script and a cr
 
 ---
 
+## The Origin Story
+
+LiveLapse was built by [Veridian Labs](https://veridianlabs.co) to capture NASA's Artemis II lunar flyby — a once-in-a-generation event broadcasting live across multiple feeds simultaneously on April 6, 2026. We needed something that could run unattended for 24+ hours, survive stream drops, capture across multiple feeds in parallel, and produce clean timelapse footage afterward. Nothing off the shelf did all of that simply, so we built it.
+
+The Artemis II use case shaped the design, but the tool itself is general-purpose. If you have a live stream and want a permanent, timestamped record of it — LiveLapse is for you.
+
+---
+
 ## Why LiveLapse?
 
 Most screen recorders and stream downloaders aren't designed to run unattended for hours or days, reconnect automatically when a stream drops, or produce frame archives that survive restarts without gaps or filename collisions. LiveLapse is.
@@ -54,8 +62,6 @@ Track seasonal change, plant or crop growth, or wildlife behavior from a remote 
 
 **Requirements:** `yt-dlp`, `ffmpeg`, `jq`, `curl` (installed by `install.sh`)
 
-**Using an AI agent?** Open the repo in Claude Code, Codex, or OpenCode and just say `bootstrap` or `init` — the `livelapse-init` skill walks through every step below automatically.
-
 ```bash
 # 1. Clone
 git clone https://github.com/veridian-labs/livelapse /opt/livelapse
@@ -77,6 +83,43 @@ cp .env.example .env
 ```
 
 Frames appear in `$LIVELAPSE_DATA_DIR/<feed-name>/` within seconds.
+
+---
+
+## AI Developer Experience
+
+LiveLapse is structured as an AI-native repository. Any agent that opens this repo gets full operational context automatically — no manual briefing required.
+
+**Using an AI agent?** Open the repo in Claude Code, Codex, or OpenCode and just say `bootstrap` or `init` — the `livelapse-init` skill walks through every step in Quick Start automatically.
+
+### Automatic project context
+
+`AGENTS.md` (read by Codex and OpenCode) and `CLAUDE.md` (read by Claude Code) point to the same source of truth. Open this repo in any major AI coding tool and the agent already knows:
+
+- What the project does and its current implementation state
+- Which files do what and how to navigate the codebase
+- Dev conventions (UTC timestamps, no database, never read `.env` directly)
+- What's implemented vs. still planned
+
+### Skills
+
+Two skills ship with the repo, available to all three agent tools without duplication:
+
+| Skill | What it covers | Example triggers |
+|---|---|---|
+| `livelapse-init` | First-time setup — copies `.env`, configures feeds, runs `install.sh`, starts capture | "bootstrap", "init", "set up the project" |
+| `livelapse-ops` | Ongoing operations — start/stop feeds, previews, logs, Linux/systemd deployment, DigitalOcean | "start the main feed", "render a preview", "deploy to Ubuntu" |
+
+Each skill is stored once in `.agents/skills/` (the spec-standard location, read by Codex and OpenCode) and symlinked into `.claude/skills/` for Claude Code.
+
+**You don't need to name them.** Each skill's description drives automatic loading — just ask naturally. To force-load one regardless of context:
+
+```
+/livelapse-init
+/livelapse-ops what's the full systemd deployment sequence?
+```
+
+This pattern — `AGENTS.md` as the repo's standing brief, skills as operational playbooks — is a reusable template for any AI-native project. See [docs/cross-agent-skills-deployment-guide.md](docs/cross-agent-skills-deployment-guide.md) for the full compatibility matrix and deployment scenarios across Claude Code, Codex, and OpenCode.
 
 ---
 
@@ -120,6 +163,19 @@ ALERT_TO=you@example.com
 HEALTHCHECK_STALE_SECONDS=120  # Seconds with no new frames before alerting
 HEALTHCHECK_DISK_THRESHOLD=80  # Disk usage % threshold
 ```
+
+---
+
+## How It Works
+
+Each feed runs as a systemd service (`livelapse@<feed-name>.service`) wrapping a `yt-dlp | ffmpeg` pipeline:
+
+- `yt-dlp` resolves the stream URL and pipes video to ffmpeg
+- `ffmpeg` extracts frames at the configured rate, writing each as a timestamped file
+- On stream drop, the service waits `RETRY_DELAY` seconds and reconnects automatically
+- Filenames use `-strftime 1` so they reflect real wall-clock time — restarts produce no collisions and no gaps to reconcile
+
+Health checks run every 60 seconds via cron, checking frame age per feed and disk usage. Alerts are rate-limited to one per 10 minutes per feed per alert type.
 
 ---
 
@@ -193,51 +249,39 @@ Options: `--start` / `--end` (ISO 8601), `--playback-fps` (default 30), `--outpu
 
 ---
 
-## How It Works
+## Deployment
 
-Each feed runs as a systemd service (`livelapse@<feed-name>.service`) wrapping a `yt-dlp | ffmpeg` pipeline:
+### Platform Compatibility
 
-- `yt-dlp` resolves the stream URL and pipes video to ffmpeg
-- `ffmpeg` extracts frames at the configured rate, writing each as a timestamped file
-- On stream drop, the service waits `RETRY_DELAY` seconds and reconnects automatically
-- Filenames use `-strftime 1` so they reflect real wall-clock time — restarts produce no collisions and no gaps to reconcile
-
-Health checks run every 60 seconds via cron, checking frame age per feed and disk usage. Alerts are rate-limited to one per 10 minutes per feed per alert type.
-
----
-
-## AI Developer Experience
-
-LiveLapse is structured as an AI-native repository. Any agent that opens this repo gets full operational context automatically — no manual briefing required.
-
-### Automatic project context
-
-`AGENTS.md` (read by Codex and OpenCode) and `CLAUDE.md` (read by Claude Code) point to the same source of truth. Open this repo in any major AI coding tool and the agent already knows:
-
-- What the project does and its current implementation state
-- Which files do what and how to navigate the codebase
-- Dev conventions (UTC timestamps, no database, never read `.env` directly)
-- What's implemented vs. still planned
-
-### Skills
-
-Two skills ship with the repo, available to all three agent tools without duplication:
-
-| Skill | What it covers | Example triggers |
+| Feature | macOS | Linux (Ubuntu 24+) |
 |---|---|---|
-| `livelapse-init` | First-time setup — copies `.env`, configures feeds, runs `install.sh`, starts capture | "bootstrap", "init", "set up the project" |
-| `livelapse-ops` | Ongoing operations — start/stop feeds, previews, logs, Linux/systemd deployment, DigitalOcean | "start the main feed", "render a preview", "deploy to Ubuntu" |
+| Install deps | `brew install yt-dlp ffmpeg jq` | `apt install yt-dlp ffmpeg jq curl bc` |
+| Process management | Background process + PID file | systemd template units |
+| Logs | `.pids/<feed>.log` | `journalctl -u livelapse@<feed>` |
+| Health check | User crontab | `/etc/cron.d/livelapse` |
+| Sleep prevention | `livelapse caffeinate start` | Not needed |
 
-Each skill is stored once in `.agents/skills/` (the spec-standard location, read by Codex and OpenCode) and symlinked into `.claude/skills/` for Claude Code.
+### Resource Usage (720p, WebP lossless, 1 fps)
 
-**You don't need to name them.** Each skill's description drives automatic loading — just ask naturally. To force-load one regardless of context:
+| | Per feed |
+|---|---|
+| Frame size | ~500 KB – 1 MB |
+| Per hour | ~1.8 – 3.6 GB |
+| Per day | ~43 – 86 GB |
+| CPU | ~5–10% of one vCPU |
+| RAM | ~50–100 MB |
 
-```
-/livelapse-init
-/livelapse-ops what's the full systemd deployment sequence?
-```
+For a 3-feed, 3-day capture: 250 GB volume, 2 vCPU / 2 GB RAM droplet.
 
-This pattern — `AGENTS.md` as the repo's standing brief, skills as operational playbooks — is a reusable template for any AI-native project. See [docs/cross-agent-skills-deployment-guide.md](docs/cross-agent-skills-deployment-guide.md) for the full compatibility matrix and deployment scenarios across Claude Code, Codex, and OpenCode.
+### DigitalOcean Provisioning (Planned)
+
+`install/do-provision.sh` is planned work. The intended order:
+
+1. Finish the local CLI backfill (`start`, `stop`)
+2. Validate one manual Ubuntu deployment end-to-end
+3. Add `install/do-provision.sh` once the infrastructure shape is proven
+
+See [next_steps.md](next_steps.md) for the full implementation sequence.
 
 ---
 
@@ -285,52 +329,6 @@ livelapse/
 └── output/
     └── artemis-main_2026-04-06_2026-04-06.mp4
 ```
-
----
-
-## Platform Compatibility
-
-| Feature | macOS | Linux (Ubuntu 24+) |
-|---|---|---|
-| Install deps | `brew install yt-dlp ffmpeg jq` | `apt install yt-dlp ffmpeg jq curl bc` |
-| Process management | Background process + PID file | systemd template units |
-| Logs | `.pids/<feed>.log` | `journalctl -u livelapse@<feed>` |
-| Health check | User crontab | `/etc/cron.d/livelapse` |
-| Sleep prevention | `livelapse caffeinate start` | Not needed |
-
----
-
-## Resource Usage (720p, WebP lossless, 1 fps)
-
-| | Per feed |
-|---|---|
-| Frame size | ~500 KB – 1 MB |
-| Per hour | ~1.8 – 3.6 GB |
-| Per day | ~43 – 86 GB |
-| CPU | ~5–10% of one vCPU |
-| RAM | ~50–100 MB |
-
-For a 3-feed, 3-day capture: 250 GB volume, 2 vCPU / 2 GB RAM droplet.
-
----
-
-## DigitalOcean Provisioning (Planned)
-
-`install/do-provision.sh` is planned work. The intended order:
-
-1. Finish the local CLI backfill (`start`, `stop`)
-2. Validate one manual Ubuntu deployment end-to-end
-3. Add `install/do-provision.sh` once the infrastructure shape is proven
-
-See [next_steps.md](next_steps.md) for the full implementation sequence.
-
----
-
-## The Origin Story
-
-LiveLapse was built by [Veridian Labs](https://veridianlabs.co) to capture NASA's Artemis II lunar flyby — a once-in-a-generation event broadcasting live across multiple feeds simultaneously on April 6, 2026. We needed something that could run unattended for 24+ hours, survive stream drops, capture across multiple feeds in parallel, and produce clean timelapse footage afterward. Nothing off the shelf did all of that simply, so we built it.
-
-The Artemis II use case shaped the design, but the tool itself is general-purpose. If you have a live stream and want a permanent, timestamped record of it — LiveLapse is for you.
 
 ---
 

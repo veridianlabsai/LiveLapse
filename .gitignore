@@ -4,3 +4,4 @@ data/
 
 # Internal planning docs
 docs/livelapse-spec.md
+.DS_Store
