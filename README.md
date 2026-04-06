@@ -54,6 +54,8 @@ Track seasonal change, plant or crop growth, or wildlife behavior from a remote 
 
 **Requirements:** `yt-dlp`, `ffmpeg`, `jq`, `curl` (installed by `install.sh`)
 
+**Using an AI agent?** Open the repo in Claude Code, Codex, or OpenCode and just say `bootstrap` or `init` — the `livelapse-init` skill walks through every step below automatically.
+
 ```bash
 # 1. Clone
 git clone https://github.com/veridian-labs/livelapse /opt/livelapse
@@ -217,25 +219,21 @@ LiveLapse is structured as an AI-native repository. Any agent that opens this re
 - Dev conventions (UTC timestamps, no database, never read `.env` directly)
 - What's implemented vs. still planned
 
-### The `livelapse-ops` skill
+### Skills
 
-The `.agents/skills/livelapse-ops/` skill gives agents end-to-end operational knowledge — CLI usage, macOS manual workflow, Linux/systemd deployment, DigitalOcean provisioning steps, and troubleshooting. It is available to all three major agent tools without duplication:
+Two skills ship with the repo, available to all three agent tools without duplication:
 
-| Tool | Picks up the skill from |
-|---|---|
-| Claude Code | `.claude/skills/livelapse-ops/` (symlinked) |
-| Codex | `.agents/skills/livelapse-ops/` |
-| OpenCode | `.agents/skills/livelapse-ops/` |
+| Skill | What it covers | Example triggers |
+|---|---|---|
+| `livelapse-init` | First-time setup — copies `.env`, configures feeds, runs `install.sh`, starts capture | "bootstrap", "init", "set up the project" |
+| `livelapse-ops` | Ongoing operations — start/stop feeds, previews, logs, Linux/systemd deployment, DigitalOcean | "start the main feed", "render a preview", "deploy to Ubuntu" |
 
-**You don't need to name it.** The skill's description drives automatic loading — just ask naturally:
+Each skill is stored once in `.agents/skills/` (the spec-standard location, read by Codex and OpenCode) and symlinked into `.claude/skills/` for Claude Code.
 
-> "start the artemis2-main feed"
-> "how do I deploy to the DigitalOcean droplet?"
-> "render a preview for artemis2-2nd"
-
-To force-load it regardless of context:
+**You don't need to name them.** Each skill's description drives automatic loading — just ask naturally. To force-load one regardless of context:
 
 ```
+/livelapse-init
 /livelapse-ops what's the full systemd deployment sequence?
 ```
 
@@ -266,10 +264,13 @@ livelapse/
 │   └── livelapse@.service          # Systemd template unit
 ├── .agents/
 │   └── skills/
+│       ├── livelapse-init/         # First-time setup skill (Codex, OpenCode)
+│       │   └── SKILL.md
 │       └── livelapse-ops/          # Operations skill (Codex, OpenCode)
 │           └── SKILL.md
 └── .claude/
     └── skills/
+        ├── livelapse-init -> ...   # Symlink for Claude Code
         └── livelapse-ops -> ...    # Symlink for Claude Code
 ```
 

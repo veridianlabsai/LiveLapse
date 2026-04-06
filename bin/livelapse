@@ -439,10 +439,14 @@ resolve_lifecycle_targets() {
   fi
 
   if select_lifecycle_targets "$operation" "$target_state" "$helper_note"; then
-    return 0
+    selection_status=0
+  else
+    selection_status=$?
   fi
 
-  selection_status=$?
+  if (( selection_status == 0 )); then
+    return 0
+  fi
   if (( selection_status == 2 )); then
     printf '%s cancelled.\n' "$operation"
     return 2
@@ -563,17 +567,21 @@ confirm_stop_targets() {
   fi
 
   if confirm_action "$prompt"; then
-    return 0
+    confirmation_status=0
+  else
+    confirmation_status=$?
   fi
 
-  confirmation_status=$?
+  if (( confirmation_status == 0 )); then
+    return 0
+  fi
   if (( confirmation_status == 2 )); then
     printf 'Refusing to stop feeds without interactive confirmation. Re-run with --yes if you really mean it.\n' >&2
     return 1
   fi
 
   printf 'stop cancelled.\n'
-  return 1
+  return 2
 }
 
 filter_running_stop_targets() {
@@ -614,6 +622,12 @@ maybe_restart_running_feed() {
   prompt="Stop the existing capture and start ${feed_name} again?"
 
   if confirm_action "$prompt"; then
+    confirmation_status=0
+  else
+    confirmation_status=$?
+  fi
+
+  if (( confirmation_status == 0 )); then
     if [[ "$LIFECYCLE_DRY_RUN" == "yes" ]]; then
       printf '[dry-run] would stop %s (pid %s)\n' "$feed_name" "$pid"
       printf '[dry-run] would start %s\n' "$feed_name"
@@ -628,7 +642,6 @@ maybe_restart_running_feed() {
     return 0
   fi
 
-  confirmation_status=$?
   if (( confirmation_status == 2 )); then
     printf 'Skipping %s. Re-run with --yes to restart it non-interactively.\n' "$feed_name"
     return 10
@@ -646,8 +659,11 @@ start_feed() {
   ensure_feed_exists "$feed_name"
 
   if pid="$(feed_running_pid "$feed_name" 2>/dev/null)"; then
-    maybe_restart_running_feed "$feed_name" "$pid"
-    restart_status=$?
+    if maybe_restart_running_feed "$feed_name" "$pid"; then
+      restart_status=0
+    else
+      restart_status=$?
+    fi
     if (( restart_status == 10 )); then
       return 0
     fi
@@ -701,8 +717,11 @@ start_command() {
   ensure_feeds_exist
   ensure_pids_dir
 
-  resolve_lifecycle_targets start
-  target_status=$?
+  if resolve_lifecycle_targets start; then
+    target_status=0
+  else
+    target_status=$?
+  fi
   if (( target_status == 2 || target_status == 3 )); then
     return 0
   fi
@@ -724,8 +743,11 @@ stop_command() {
   ensure_feeds_exist
   ensure_pids_dir
 
-  resolve_lifecycle_targets stop
-  target_status=$?
+  if resolve_lifecycle_targets stop; then
+    target_status=0
+  else
+    target_status=$?
+  fi
   if (( target_status == 2 || target_status == 3 )); then
     return 0
   fi
@@ -733,8 +755,11 @@ stop_command() {
     return "$target_status"
   fi
 
-  filter_running_stop_targets
-  target_status=$?
+  if filter_running_stop_targets; then
+    target_status=0
+  else
+    target_status=$?
+  fi
   if (( target_status == 3 )); then
     return 0
   fi
@@ -742,7 +767,15 @@ stop_command() {
     return "$target_status"
   fi
 
-  confirm_stop_targets || return 1
+  if confirm_stop_targets; then
+    :
+  else
+    target_status=$?
+    if (( target_status == 2 )); then
+      return 0
+    fi
+    return "$target_status"
+  fi
 
   while (( index < ${#RESOLVED_TARGET_FEEDS[@]} )); do
     stop_feed "${RESOLVED_TARGET_FEEDS[$index]}" || return 1
