@@ -1,65 +1,52 @@
 # LiveLapse
 
-<!-- badges: License · Platform · CI · Stars — see "Badges" section below -->
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Ubuntu%2024%2B-blue)
 
-> **Status:** Under active development — Phase 0 local capture is working. First release targeting the Artemis II lunar flyby (April 6, 2026).
+> Capture any live stream as timestamped frames. Run it forever. Never miss a moment.
 
-Self-hosted timelapse capture from live streams. Pull timestamped frames from YouTube, RTSP, or any yt-dlp/ffmpeg-compatible source and stitch them into videos. Runs headless on Linux via systemd, with email alerting and a simple CLI.
+Self-hosted timelapse engine for YouTube Live, RTSP, HLS, and anything yt-dlp or ffmpeg can reach. Point it at a stream, walk away, and come back to a precisely timestamped archive ready to render into a video at any speed.
 
-Built by [Veridian Labs](https://veridianlabs.co) to capture NASA's Artemis II lunar flyby across multiple feeds simultaneously — and designed from the start to be operated by humans and AI agents alike.
-
----
-
-## Features
-
-- Capture frames from any yt-dlp/ffmpeg-compatible stream (YouTube Live, RTSP, HLS, etc.)
-- Configurable frame rate per feed — `1` fps, `0.2` for one frame every 5 seconds, etc.
-- ISO 8601 timestamped filenames — no sequential counters, no collision on restart
-- Systemd-managed per-feed capture with automatic reconnect on stream drop
-- Point-in-time preview renders without stopping capture, with optional timestamp overlay
-- Health monitoring via cron — stale frame alerts and disk warnings via email (Resend)
-- macOS sleep prevention for long local runs
-- Works on macOS (local/testing) and Ubuntu 24+ (production)
-- No database — the filesystem is the database
+No database. No cloud dependency. No moving parts beyond a shell script and a cron job.
 
 ---
 
-## AI Developer Experience
+## Why LiveLapse?
 
-LiveLapse is structured as an AI-native repository. Any agent that opens this repo gets full operational context automatically — no manual briefing required.
+Most screen recorders and stream downloaders aren't designed to run unattended for hours or days, reconnect automatically when a stream drops, or produce frame archives that survive restarts without gaps or filename collisions. LiveLapse is.
 
-### Automatic project context
+- **Any source** — YouTube Live, RTSP cameras, HLS, RTMP, or any URL yt-dlp understands
+- **Self-hosted** — your frames, your disk, your infrastructure
+- **Runs forever** — systemd-managed with automatic reconnect on stream drop
+- **No collisions** — ISO 8601 timestamped filenames; restarts never overwrite existing frames
+- **No database** — the filesystem is the database; browse, inspect, and manage frames with standard tools
+- **Point-in-time previews** — render a video from captured frames without stopping capture
+- **Health monitoring** — stale frame and disk alerts via email (Resend), rate-limited and cron-driven
 
-`AGENTS.md` (read by Codex and OpenCode) and `CLAUDE.md` (read by Claude Code) point to the same source of truth. Open this repo in any major AI coding tool and the agent already knows:
+---
 
-- What the project does and its current implementation state
-- Which files do what and how to navigate the codebase
-- Dev conventions (UTC timestamps, no database, never read `.env` directly)
-- What's implemented vs. still planned
+## Use Cases
 
-### The `livelapse-ops` skill
+**Space & astronomy**
+Capture rocket launches, eclipses, ISS flybys, or any major live event frame-by-frame across multiple feeds simultaneously.
 
-The `.agents/skills/livelapse-ops/` skill gives agents end-to-end operational knowledge — CLI usage, macOS manual workflow, Linux/systemd deployment, DigitalOcean provisioning steps, and troubleshooting. It is available to all three major agent tools without duplication:
+**Breaking news & live events**
+Archive a news broadcast, election night, or weather emergency as it unfolds — searchable by timestamp after the fact.
 
-| Tool | Picks up the skill from |
-|---|---|
-| Claude Code | `.claude/skills/livelapse-ops/` (symlinked) |
-| Codex | `.agents/skills/livelapse-ops/` |
-| OpenCode | `.agents/skills/livelapse-ops/` |
+**Construction & infrastructure**
+Pull frames from IP cameras or public webcams to document site progress over days, weeks, or months.
 
-**You don't need to name it.** The skill's description drives automatic loading — just ask naturally:
+**Environment & science**
+Monitor wildfires (CAL FIRE streams), weather systems, tide gauges, or geological cameras — many public RTSP feeds are available at no cost.
 
-> "start the artemis2-main feed"
-> "how do I deploy to the DigitalOcean droplet?"
-> "render a preview for artemis2-2nd"
+**Security archiving**
+Self-hosted DVR alternative. Archive RTSP camera feeds with timestamped frames, no cloud subscription required.
 
-To force-load it regardless of context:
+**Nature & agriculture**
+Track seasonal change, plant or crop growth, or wildlife behavior from a remote camera over an extended period.
 
-```
-/livelapse-ops what's the full systemd deployment sequence?
-```
-
-This pattern — `AGENTS.md` as the repo's standing brief, skills as operational playbooks — is a reusable template for any AI-native project. See [docs/cross-agent-skills-deployment-guide.md](docs/cross-agent-skills-deployment-guide.md) for the full compatibility matrix and deployment scenarios across Claude Code, Codex, and OpenCode.
+**Long-form events**
+24-hour endurance races, marathon courses, concert live-streams — anything too long to watch live but worth having on record.
 
 ---
 
@@ -87,7 +74,7 @@ cp .env.example .env
 # Linux: systemctl start livelapse@<feed-name>
 ```
 
-Frames will appear in `$LIVELAPSE_DATA_DIR/<feed-name>/` within seconds.
+Frames appear in `$LIVELAPSE_DATA_DIR/<feed-name>/` within seconds.
 
 ---
 
@@ -100,7 +87,7 @@ Pipe-delimited, one feed per line. Comments start with `#`.
 ```
 # name|url|fps
 artemis-main|https://www.youtube.com/live/5flTTJuoExo|1
-spacecraft-cam|rtsp://example.com/stream|0.5
+construction-cam|rtsp://192.168.1.100/stream|0.2
 ```
 
 - **name** — Alphanumeric + hyphens. Used as the folder name and systemd instance identifier.
@@ -204,6 +191,45 @@ Health checks run every 60 seconds via cron, checking frame age per feed and dis
 
 ---
 
+## AI Developer Experience
+
+LiveLapse is structured as an AI-native repository. Any agent that opens this repo gets full operational context automatically — no manual briefing required.
+
+### Automatic project context
+
+`AGENTS.md` (read by Codex and OpenCode) and `CLAUDE.md` (read by Claude Code) point to the same source of truth. Open this repo in any major AI coding tool and the agent already knows:
+
+- What the project does and its current implementation state
+- Which files do what and how to navigate the codebase
+- Dev conventions (UTC timestamps, no database, never read `.env` directly)
+- What's implemented vs. still planned
+
+### The `livelapse-ops` skill
+
+The `.agents/skills/livelapse-ops/` skill gives agents end-to-end operational knowledge — CLI usage, macOS manual workflow, Linux/systemd deployment, DigitalOcean provisioning steps, and troubleshooting. It is available to all three major agent tools without duplication:
+
+| Tool | Picks up the skill from |
+|---|---|
+| Claude Code | `.claude/skills/livelapse-ops/` (symlinked) |
+| Codex | `.agents/skills/livelapse-ops/` |
+| OpenCode | `.agents/skills/livelapse-ops/` |
+
+**You don't need to name it.** The skill's description drives automatic loading — just ask naturally:
+
+> "start the artemis2-main feed"
+> "how do I deploy to the DigitalOcean droplet?"
+> "render a preview for artemis2-2nd"
+
+To force-load it regardless of context:
+
+```
+/livelapse-ops what's the full systemd deployment sequence?
+```
+
+This pattern — `AGENTS.md` as the repo's standing brief, skills as operational playbooks — is a reusable template for any AI-native project. See [docs/cross-agent-skills-deployment-guide.md](docs/cross-agent-skills-deployment-guide.md) for the full compatibility matrix and deployment scenarios across Claude Code, Codex, and OpenCode.
+
+---
+
 ## Directory Layout
 
 ```
@@ -286,31 +312,14 @@ See [next_steps.md](next_steps.md) for the full implementation sequence.
 
 ---
 
-## Badges
+## The Origin Story
 
-To be added once CI and the first release are in place. Replace the `<!-- badges -->` comment at the top of this file when ready:
+LiveLapse was built by [Veridian Labs](https://veridianlabs.co) to capture NASA's Artemis II lunar flyby — a once-in-a-generation event broadcasting live across multiple feeds simultaneously on April 6, 2026. We needed something that could run unattended for 24+ hours, survive stream drops, capture across multiple feeds in parallel, and produce clean timelapse footage afterward. Nothing off the shelf did all of that simply, so we built it.
 
-| Badge | Add when |
-|---|---|
-| `[![License: MIT](...)](LICENSE)` | Ready now |
-| `![Platform](... macOS \| Ubuntu 24+)` | Ready now |
-| CI status (GitHub Actions) | When the first workflow is added |
-| Latest release / version | On first tagged release |
-| GitHub stars | After public launch |
-
-To add the first two immediately:
-
-```markdown
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Ubuntu%2024%2B-blue)
-```
+The Artemis II use case shaped the design, but the tool itself is general-purpose. If you have a live stream and want a permanent, timestamped record of it — LiveLapse is for you.
 
 ---
 
 ## License
 
 MIT — see [LICENSE](LICENSE).
-
----
-
-*Built by [Veridian Labs](https://veridianlabs.co) to capture the Artemis II lunar flyby.*

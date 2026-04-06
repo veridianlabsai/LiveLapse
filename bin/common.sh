@@ -211,6 +211,62 @@ feed_log_file() {
   printf '%s/%s.log\n' "$(pids_dir)" "$feed_name"
 }
 
+systemd_feed_unit() {
+  local feed_name="$1"
+
+  printf 'livelapse@%s\n' "$feed_name"
+}
+
+systemd_feed_main_pid() {
+  local feed_name="$1"
+  local unit pid=""
+
+  command -v systemctl >/dev/null 2>&1 || return 1
+
+  unit="$(systemd_feed_unit "$feed_name")"
+  systemctl is-active --quiet "$unit" || return 1
+
+  pid="$(systemctl show --property MainPID --value "$unit" 2>/dev/null | tr -d '[:space:]')"
+  [[ -n "$pid" && "$pid" != "0" ]] || return 1
+
+  printf '%s\n' "$pid"
+}
+
+feed_running_pid() {
+  local feed_name="$1"
+  local pid_file pid=""
+
+  validate_feed_name "$feed_name"
+
+  if is_linux; then
+    if pid="$(systemd_feed_main_pid "$feed_name" 2>/dev/null)"; then
+      printf '%s\n' "$pid"
+      return 0
+    fi
+    return 1
+  fi
+
+  pid_file="$(feed_pid_file "$feed_name")"
+  cleanup_stale_pid_file "$pid_file"
+
+  if pid="$(read_pid_file "$pid_file" 2>/dev/null)" && pid_is_running "$pid"; then
+    printf '%s\n' "$pid"
+    return 0
+  fi
+
+  return 1
+}
+
+pid_process_group() {
+  local pid="$1"
+  local pgid=""
+
+  pgid="$(ps -o pgid= -p "$pid" 2>/dev/null | tr -d '[:space:]')"
+  [[ -n "$pgid" ]] || return 1
+
+  printf '%s\n' "$pgid"
+}
+
 caffeinate_pid_file() {
   printf '%s/caffeinate.pid\n' "$(pids_dir)"
 }

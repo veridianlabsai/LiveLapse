@@ -14,6 +14,8 @@ usage() {
   cat <<'EOF' >&2
 Usage:
   bin/livelapse status
+  bin/livelapse start [feed-name] [--dry-run] [--yes]
+  bin/livelapse stop [feed-name] [--dry-run] [--yes]
   bin/livelapse logs <feed-name> [--lines <n>] [--follow|--no-follow]
   bin/livelapse preview <feed-name> [--playback-fps <fps>] [--output <path>] [--add-timestamp] [--timestamp-tz <zone>]
   bin/livelapse caffeinate start
@@ -28,6 +30,13 @@ DEFAULT_PREVIEW_FPS=30
 DEFAULT_TIMESTAMP_TZ="est"
 PREVIEW_STAGE_DIR=""
 PREVIEW_PROGRESS_INTERVAL=500
+STOP_WAIT_ATTEMPTS=50
+STOP_WAIT_INTERVAL_SECONDS=0.2
+LIFECYCLE_DRY_RUN="no"
+ASSUME_YES="no"
+PARSED_FEED_NAME=""
+RESOLVED_TARGET_SCOPE="single"
+RESOLVED_TARGET_FEEDS=()
 
 ensure_darwin() {
   if ! is_darwin; then
@@ -208,6 +217,504 @@ frame_timestamp_for_display() {
   printf '%s\n' "${stem//_/:}"
 }
 
+is_interactive_terminal() {
+  [[ -t 0 && -t 1 ]]
+}
+
+lowercase_text() {
+  printf '%s' "$1" | tr '[:upper:]' '[:lower:]'
+}
+
+parse_lifecycle_args() {
+  PARSED_FEED_NAME=""
+  LIFECYCLE_DRY_RUN="no"
+  ASSUME_YES="no"
+
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --dry-run)
+        LIFECYCLE_DRY_RUN="yes"
+        ;;
+      --yes|-y)
+        ASSUME_YES="yes"
+        ;;
+      -*)
+        log "Unknown lifecycle option: $1"
+        return 1
+        ;;
+      *)
+        if [[ -n "$PARSED_FEED_NAME" ]]; then
+          log "Only one feed name may be provided"
+          return 1
+        fi
+        PARSED_FEED_NAME="$1"
+        ;;
+    esac
+    shift
+  done
+}
+
+confirm_action() {
+  local prompt="$1"
+  local default_answer="${2:-no}"
+  local reply normalized=""
+
+  if [[ "$ASSUME_YES" == "yes" ]]; then
+    return 0
+  fi
+
+  if ! is_interactive_terminal; then
+    return 2
+  fi
+
+  while true; do
+    if [[ "$default_answer" == "yes" ]]; then
+      printf '%s [Y/n] ' "$prompt"
+    else
+      printf '%s [y/N] ' "$prompt"
+    fi
+
+    read -r reply
+    normalized="$(lowercase_text "$reply")"
+
+    case "$normalized" in
+      y|yes)
+        return 0
+        ;;
+      n|no)
+        return 1
+        ;;
+      "")
+        if [[ "$default_answer" == "yes" ]]; then
+          return 0
+        fi
+        return 1
+        ;;
+      *)
+        printf 'Please answer yes or no.\n' >&2
+        ;;
+    esac
+  done
+}
+
+feed_state() {
+  local feed_name="$1"
+
+  if feed_running_pid "$feed_name" >/dev/null 2>&1; then
+    printf 'running\n'
+    return 0
+  fi
+
+  printf 'stopped\n'
+}
+
+load_filtered_feed_targets() {
+  local target_state="$1"
+  local feed_name state=""
+
+  RESOLVED_TARGET_FEEDS=()
+
+  while IFS= read -r feed_name; do
+    state="$(feed_state "$feed_name")"
+    if [[ "$state" != "$target_state" ]]; then
+      continue
+    fi
+    RESOLVED_TARGET_FEEDS[${#RESOLVED_TARGET_FEEDS[@]}]="$feed_name"
+  done < <(list_feed_names)
+}
+
+join_feed_names() {
+  local result=""
+  local index=0
+
+  while (( index < ${#RESOLVED_TARGET_FEEDS[@]} )); do
+    if [[ -n "$result" ]]; then
+      result="${result}, "
+    fi
+    result="${result}${RESOLVED_TARGET_FEEDS[$index]}"
+    index=$((index + 1))
+  done
+
+  printf '%s\n' "$result"
+}
+
+select_lifecycle_targets() {
+  local operation="$1"
+  local target_state="$2"
+  local helper_note="${3:-}"
+  local selection prompt=""
+  local -a options
+  local index=0
+  local option_number=1
+  local normalized=""
+
+  options=()
+  options[0]="__all__"
+
+  if (( ${#RESOLVED_TARGET_FEEDS[@]} == 0 )); then
+    printf 'No %s feeds are available to %s.\n' "$target_state" "$operation"
+    return 1
+  fi
+
+  printf '%s feeds available to %s:\n' "$target_state" "$operation"
+  printf '  0) all %s feeds\n' "$target_state"
+
+  while (( index < ${#RESOLVED_TARGET_FEEDS[@]} )); do
+    options[$option_number]="${RESOLVED_TARGET_FEEDS[$index]}"
+    printf '  %s) %s\n' "$option_number" "${options[$option_number]}"
+    index=$((index + 1))
+    option_number=$((option_number + 1))
+  done
+
+  if [[ -n "$helper_note" ]]; then
+    printf '%s\n' "$helper_note"
+  fi
+
+  prompt="Select a feed to $operation (0 for all, q to cancel): "
+
+  while true; do
+    printf '%s' "$prompt"
+    read -r selection
+    normalized="$(lowercase_text "$selection")"
+
+    case "$normalized" in
+      q|quit|cancel)
+        return 2
+        ;;
+    esac
+
+    if [[ "$selection" =~ ^[0-9]+$ ]] && (( selection < option_number )); then
+      if (( selection == 0 )); then
+        RESOLVED_TARGET_SCOPE="all"
+        return 0
+      fi
+
+      RESOLVED_TARGET_SCOPE="single"
+      RESOLVED_TARGET_FEEDS=("${options[$selection]}")
+      return 0
+    fi
+
+    printf 'Enter one of the numbered options, or q to cancel.\n' >&2
+  done
+}
+
+resolve_lifecycle_targets() {
+  local operation="$1"
+  local target_state helper_note=""
+  local selection_status=0
+
+  RESOLVED_TARGET_SCOPE="single"
+  RESOLVED_TARGET_FEEDS=()
+
+  if [[ -n "$PARSED_FEED_NAME" ]]; then
+    ensure_feed_exists "$PARSED_FEED_NAME"
+    RESOLVED_TARGET_FEEDS=("$PARSED_FEED_NAME")
+    return 0
+  fi
+
+  case "$operation" in
+    start)
+      target_state="stopped"
+      helper_note="Running feeds are hidden from this picker for safety. Use start <feed-name> if you want to restart one."
+      ;;
+    stop)
+      target_state="running"
+      ;;
+    *)
+      log "Unsupported lifecycle operation: $operation"
+      return 1
+      ;;
+  esac
+
+  load_filtered_feed_targets "$target_state"
+
+  if (( ${#RESOLVED_TARGET_FEEDS[@]} == 0 )); then
+    printf 'No %s feeds are available to %s.\n' "$target_state" "$operation"
+    return 3
+  fi
+
+  if ! is_interactive_terminal; then
+    RESOLVED_TARGET_SCOPE="all"
+    return 0
+  fi
+
+  if select_lifecycle_targets "$operation" "$target_state" "$helper_note"; then
+    return 0
+  fi
+
+  selection_status=$?
+  if (( selection_status == 2 )); then
+    printf '%s cancelled.\n' "$operation"
+    return 2
+  fi
+
+  return "$selection_status"
+}
+
+wait_for_pid_exit() {
+  local pid="$1"
+  local attempts="${2:-$STOP_WAIT_ATTEMPTS}"
+
+  while (( attempts > 0 )); do
+    if ! pid_is_running "$pid"; then
+      return 0
+    fi
+
+    sleep "$STOP_WAIT_INTERVAL_SECONDS"
+    attempts=$((attempts - 1))
+  done
+
+  return 1
+}
+
+signal_feed_process() {
+  local signal="$1"
+  local pid="$2"
+  local target_pgid="" current_pgid=""
+
+  target_pgid="$(pid_process_group "$pid" 2>/dev/null || true)"
+  current_pgid="$(pid_process_group "$$" 2>/dev/null || true)"
+
+  if [[ -n "$target_pgid" && "$target_pgid" != "$current_pgid" ]]; then
+    if kill "-${signal}" -- "-${target_pgid}" 2>/dev/null; then
+      return 0
+    fi
+  fi
+
+  kill "-${signal}" "$pid" 2>/dev/null
+}
+
+start_local_feed() {
+  local feed_name="$1"
+  local capture_script pid_file log_file pid=""
+
+  ensure_command python3
+  ensure_pids_dir
+
+  capture_script="$SCRIPT_DIR/capture.sh"
+  pid_file="$(feed_pid_file "$feed_name")"
+  log_file="$(feed_log_file "$feed_name")"
+
+  nohup python3 -c 'import os, sys; os.setsid(); os.execv(sys.argv[1], sys.argv[1:])' \
+    "$capture_script" "$feed_name" >"$log_file" 2>&1 < /dev/null &
+  pid=$!
+
+  printf '%s\n' "$pid" >"$pid_file"
+  printf 'started %s (pid %s)\n' "$feed_name" "$pid"
+}
+
+stop_local_feed() {
+  local feed_name="$1"
+  local pid="$2"
+  local pid_file
+
+  pid_file="$(feed_pid_file "$feed_name")"
+
+  if ! signal_feed_process TERM "$pid"; then
+    log "Failed to signal $feed_name (pid $pid)"
+    return 1
+  fi
+
+  if ! wait_for_pid_exit "$pid"; then
+    log "$feed_name did not stop after SIGTERM; sending SIGKILL"
+    signal_feed_process KILL "$pid" || true
+    if ! wait_for_pid_exit "$pid" 10; then
+      log "$feed_name did not stop cleanly"
+      return 1
+    fi
+  fi
+
+  rm -f "$pid_file"
+  printf 'stopped %s\n' "$feed_name"
+}
+
+start_linux_feed() {
+  local feed_name="$1"
+  local unit
+
+  unit="$(systemd_feed_unit "$feed_name")"
+  run_as_root systemctl start "$unit"
+  printf 'started %s\n' "$feed_name"
+}
+
+stop_linux_feed() {
+  local feed_name="$1"
+  local unit
+
+  unit="$(systemd_feed_unit "$feed_name")"
+  run_as_root systemctl stop "$unit"
+  printf 'stopped %s\n' "$feed_name"
+}
+
+confirm_stop_targets() {
+  local prompt=""
+  local names=""
+  local confirmation_status=0
+
+  if [[ "$ASSUME_YES" == "yes" ]]; then
+    return 0
+  fi
+
+  if (( ${#RESOLVED_TARGET_FEEDS[@]} == 1 )); then
+    prompt="Stop ${RESOLVED_TARGET_FEEDS[0]}?"
+  else
+    names="$(join_feed_names)"
+    prompt="Stop ${#RESOLVED_TARGET_FEEDS[@]} feeds (${names})?"
+  fi
+
+  if confirm_action "$prompt"; then
+    return 0
+  fi
+
+  confirmation_status=$?
+  if (( confirmation_status == 2 )); then
+    printf 'Refusing to stop feeds without interactive confirmation. Re-run with --yes if you really mean it.\n' >&2
+    return 1
+  fi
+
+  printf 'stop cancelled.\n'
+  return 1
+}
+
+maybe_restart_running_feed() {
+  local feed_name="$1"
+  local pid="$2"
+  local prompt=""
+  local confirmation_status=0
+
+  printf '%s is already running (pid %s).\n' "$feed_name" "$pid"
+  printf 'To capture the same source twice, duplicate the feeds.conf entry under a new feed name.\n'
+
+  prompt="Stop the existing capture and start ${feed_name} again?"
+
+  if confirm_action "$prompt"; then
+    if [[ "$LIFECYCLE_DRY_RUN" == "yes" ]]; then
+      printf '[dry-run] would stop %s (pid %s)\n' "$feed_name" "$pid"
+      printf '[dry-run] would start %s\n' "$feed_name"
+      return 10
+    fi
+
+    if is_linux; then
+      stop_linux_feed "$feed_name"
+    else
+      stop_local_feed "$feed_name" "$pid"
+    fi
+    return 0
+  fi
+
+  confirmation_status=$?
+  if (( confirmation_status == 2 )); then
+    printf 'Skipping %s. Re-run with --yes to restart it non-interactively.\n' "$feed_name"
+    return 10
+  fi
+
+  printf 'Skipping %s.\n' "$feed_name"
+  return 10
+}
+
+start_feed() {
+  local feed_name="$1"
+  local pid=""
+  local restart_status=0
+
+  ensure_feed_exists "$feed_name"
+
+  if pid="$(feed_running_pid "$feed_name" 2>/dev/null)"; then
+    maybe_restart_running_feed "$feed_name" "$pid"
+    restart_status=$?
+    if (( restart_status == 10 )); then
+      return 0
+    fi
+    if (( restart_status != 0 )); then
+      return "$restart_status"
+    fi
+  fi
+
+  if [[ "$LIFECYCLE_DRY_RUN" == "yes" ]]; then
+    printf '[dry-run] would start %s\n' "$feed_name"
+    return 0
+  fi
+
+  if is_linux; then
+    start_linux_feed "$feed_name"
+    return 0
+  fi
+
+  start_local_feed "$feed_name"
+}
+
+stop_feed() {
+  local feed_name="$1"
+  local pid=""
+
+  ensure_feed_exists "$feed_name"
+
+  if ! pid="$(feed_running_pid "$feed_name" 2>/dev/null)"; then
+    printf '%s is already stopped.\n' "$feed_name"
+    return 0
+  fi
+
+  if [[ "$LIFECYCLE_DRY_RUN" == "yes" ]]; then
+    printf '[dry-run] would stop %s (pid %s)\n' "$feed_name" "$pid"
+    return 0
+  fi
+
+  if is_linux; then
+    stop_linux_feed "$feed_name"
+    return 0
+  fi
+
+  stop_local_feed "$feed_name" "$pid"
+}
+
+start_command() {
+  local index=0
+  local target_status=0
+
+  parse_lifecycle_args "$@" || return 1
+  ensure_feeds_exist
+  ensure_pids_dir
+
+  resolve_lifecycle_targets start
+  target_status=$?
+  if (( target_status == 2 || target_status == 3 )); then
+    return 0
+  fi
+  if (( target_status != 0 )); then
+    return "$target_status"
+  fi
+
+  while (( index < ${#RESOLVED_TARGET_FEEDS[@]} )); do
+    start_feed "${RESOLVED_TARGET_FEEDS[$index]}" || return 1
+    index=$((index + 1))
+  done
+}
+
+stop_command() {
+  local index=0
+  local target_status=0
+
+  parse_lifecycle_args "$@" || return 1
+  ensure_feeds_exist
+  ensure_pids_dir
+
+  resolve_lifecycle_targets stop
+  target_status=$?
+  if (( target_status == 2 || target_status == 3 )); then
+    return 0
+  fi
+  if (( target_status != 0 )); then
+    return "$target_status"
+  fi
+
+  confirm_stop_targets || return 1
+
+  while (( index < ${#RESOLVED_TARGET_FEEDS[@]} )); do
+    stop_feed "${RESOLVED_TARGET_FEEDS[$index]}" || return 1
+    index=$((index + 1))
+  done
+}
+
 status_command() {
   ensure_feeds_exist
   ensure_pids_dir
@@ -220,13 +727,11 @@ status_command() {
   printf '%-16s %-8s %-8s %-22s %s\n' "FEED" "STATE" "PID" "LAST_FRAME_UTC" "FRAMES"
 
   while IFS= read -r feed_name; do
-    local pid_file pid state feed_dir last_frame count
-    pid_file="$(feed_pid_file "$feed_name")"
-    cleanup_stale_pid_file "$pid_file"
+    local pid state feed_dir last_frame count
 
     state="stopped"
     pid="-"
-    if pid="$(read_pid_file "$pid_file" 2>/dev/null)" && pid_is_running "$pid"; then
+    if pid="$(feed_running_pid "$feed_name" 2>/dev/null)"; then
       state="running"
     else
       pid="-"
@@ -663,6 +1168,12 @@ main() {
   case "$command" in
     status)
       status_command "$@"
+      ;;
+    start)
+      start_command "$@"
+      ;;
+    stop)
+      stop_command "$@"
       ;;
     logs)
       logs_command "$@"
