@@ -1,32 +1,65 @@
 # LiveLapse
 
-> **Status:** Under active development for the Artemis II lunar flyby (April 6, 2026). First release coming soon.
+<!-- badges: License · Platform · CI · Stars — see "Badges" section below -->
+
+> **Status:** Under active development — Phase 0 local capture is working. First release targeting the Artemis II lunar flyby (April 6, 2026).
 
 Self-hosted timelapse capture from live streams. Pull timestamped frames from YouTube, RTSP, or any yt-dlp/ffmpeg-compatible source and stitch them into videos. Runs headless on Linux via systemd, with email alerting and a simple CLI.
 
-Built to capture NASA's Artemis II lunar flyby across multiple feeds simultaneously.
-
-Current implementation note:
-
-- Local capture works today via `bin/capture.sh`
-- `bin/livelapse` currently implements `status`, `logs <feed>`, and `preview <feed>` plus `caffeinate start|stop|status` on macOS
-- Feed lifecycle commands such as `start|stop` are still being backfilled after the current local soak
-- For the current macOS workflow, see [docs/macos-runbook.md](docs/macos-runbook.md)
-- For the next implementation steps, see [next_steps.md](next_steps.md)
+Built by [Veridian Labs](https://veridianlabs.co) to capture NASA's Artemis II lunar flyby across multiple feeds simultaneously — and designed from the start to be operated by humans and AI agents alike.
 
 ---
 
 ## Features
 
 - Capture frames from any yt-dlp/ffmpeg-compatible stream (YouTube Live, RTSP, HLS, etc.)
-- Configurable frame rate per feed (e.g. `1` fps, `0.2` for one frame every 5 seconds)
+- Configurable frame rate per feed — `1` fps, `0.2` for one frame every 5 seconds, etc.
 - ISO 8601 timestamped filenames — no sequential counters, no collision on restart
-- Systemd-managed per-feed capture processes with automatic restart on stream drop
-- Health monitoring via cron — per-feed stale alerts and disk usage warnings via email (Resend)
-- Local CLI for caffeinate, feed status, logs, and point-in-time preview videos
-- Stitching and broader feed lifecycle commands are planned next
-- Works on macOS (local testing) and Ubuntu 24+ (production)
+- Systemd-managed per-feed capture with automatic reconnect on stream drop
+- Point-in-time preview renders without stopping capture, with optional timestamp overlay
+- Health monitoring via cron — stale frame alerts and disk warnings via email (Resend)
+- macOS sleep prevention for long local runs
+- Works on macOS (local/testing) and Ubuntu 24+ (production)
 - No database — the filesystem is the database
+
+---
+
+## AI Developer Experience
+
+LiveLapse is structured as an AI-native repository. Any agent that opens this repo gets full operational context automatically — no manual briefing required.
+
+### Automatic project context
+
+`AGENTS.md` (read by Codex and OpenCode) and `CLAUDE.md` (read by Claude Code) point to the same source of truth. Open this repo in any major AI coding tool and the agent already knows:
+
+- What the project does and its current implementation state
+- Which files do what and how to navigate the codebase
+- Dev conventions (UTC timestamps, no database, never read `.env` directly)
+- What's implemented vs. still planned
+
+### The `livelapse-ops` skill
+
+The `.agents/skills/livelapse-ops/` skill gives agents end-to-end operational knowledge — CLI usage, macOS manual workflow, Linux/systemd deployment, DigitalOcean provisioning steps, and troubleshooting. It is available to all three major agent tools without duplication:
+
+| Tool | Picks up the skill from |
+|---|---|
+| Claude Code | `.claude/skills/livelapse-ops/` (symlinked) |
+| Codex | `.agents/skills/livelapse-ops/` |
+| OpenCode | `.agents/skills/livelapse-ops/` |
+
+**You don't need to name it.** The skill's description drives automatic loading — just ask naturally:
+
+> "start the artemis2-main feed"
+> "how do I deploy to the DigitalOcean droplet?"
+> "render a preview for artemis2-2nd"
+
+To force-load it regardless of context:
+
+```
+/livelapse-ops what's the full systemd deployment sequence?
+```
+
+This pattern — `AGENTS.md` as the repo's standing brief, skills as operational playbooks — is a reusable template for any AI-native project. See [docs/cross-agent-skills-deployment-guide.md](docs/cross-agent-skills-deployment-guide.md) for the full compatibility matrix and deployment scenarios across Claude Code, Codex, and OpenCode.
 
 ---
 
@@ -47,10 +80,11 @@ cp .env.example .env
 # Edit .env — set LIVELAPSE_DATA_DIR and optional alerting keys
 
 # 4. Install dependencies
-./install/install.sh
+./install.sh
 
-# 5. On macOS, use the current runbook to start capture
-# docs/macos-runbook.md
+# 5. Start capture
+# macOS: see docs/macos-runbook.md for the current manual workflow
+# Linux: systemctl start livelapse@<feed-name>
 ```
 
 Frames will appear in `$LIVELAPSE_DATA_DIR/<feed-name>/` within seconds.
@@ -69,9 +103,9 @@ artemis-main|https://www.youtube.com/live/5flTTJuoExo|1
 spacecraft-cam|rtsp://example.com/stream|0.5
 ```
 
-- **name** — Alphanumeric + hyphens. Used as folder name and systemd instance identifier.
-- **url** — Any URL supported by yt-dlp or a direct ffmpeg input (RTSP, HLS, etc).
-- **fps** — Frames per second. Use `0.2` for one frame every 5 seconds, `0.5` for every 2 seconds.
+- **name** — Alphanumeric + hyphens. Used as the folder name and systemd instance identifier.
+- **url** — Any URL supported by yt-dlp, or a direct ffmpeg input (RTSP, HLS, RTMP, etc.).
+- **fps** — Frames per second. `0.2` = one frame every 5 s, `0.5` = one every 2 s.
 
 ### `.env`
 
@@ -81,7 +115,7 @@ LIVELAPSE_DATA_DIR=/mnt/livelapse
 
 # Frame format: webp (default), png, jpg
 LIVELAPSE_FORMAT=webp
-LIVELAPSE_LOSSLESS=1          # WebP: 1=lossless. JPG: quality 1-31 (lower=better)
+LIVELAPSE_LOSSLESS=1           # WebP: 1=lossless. JPG: quality 1-31 (lower=better)
 
 # Stream settings
 LIVELAPSE_MAX_HEIGHT=720       # Max resolution height to request
@@ -99,42 +133,51 @@ HEALTHCHECK_DISK_THRESHOLD=80  # Disk usage % threshold
 
 ---
 
-## CLI Reference (Planned Surface)
+## CLI Reference
 
-Today, the implemented CLI commands are:
+### Implemented today
 
 ```bash
-./bin/livelapse status
-./bin/livelapse logs artemis2-main
-./bin/livelapse preview artemis2-main
-./bin/livelapse caffeinate start
+./bin/livelapse status                                  # Feed table: state, PID, last frame, count
+./bin/livelapse logs <feed-name>                        # Tail feed log (auto-follow in a TTY)
+./bin/livelapse logs <feed-name> --follow               # Always follow
+./bin/livelapse logs <feed-name> --lines 100            # Set line count
+./bin/livelapse preview <feed-name>                     # Render a point-in-time MP4
+./bin/livelapse preview <feed-name> --playback-fps 24
+./bin/livelapse preview <feed-name> --output ./out/preview.mp4
+./bin/livelapse preview <feed-name> --add-timestamp     # Burn capture time into each frame
+./bin/livelapse preview <feed-name> --add-timestamp --timestamp-tz et
+./bin/livelapse caffeinate start                        # Prevent idle sleep (macOS)
 ./bin/livelapse caffeinate stop
 ./bin/livelapse caffeinate status
 ```
 
-Planned next for the CLI:
+**Timestamp overlay notes (`--add-timestamp`):**
+
+- Burns each frame's capture time into the video using the filename as the source of truth
+- `--timestamp-tz <zone>` sets the display timezone; common aliases (`utc`, `et`, `est`, `edt`, `pt`, `pst`, `pdt`) are accepted
+- Default is Eastern time — resolves to `America/New_York`, so DST dates show `EDT` automatically
+
+For feed `start` and `stop`, use the manual workflow in [docs/macos-runbook.md](docs/macos-runbook.md) until those commands are backfilled.
+
+### Planned next
 
 ```
-livelapse start [feed-name]     Start all feeds, or a specific feed
-livelapse stop [feed-name]      Stop all feeds, or a specific feed
-livelapse caffeinate start      Prevent idle sleep on macOS during local capture
-livelapse caffeinate stop       Release the macOS caffeinate hold
-livelapse caffeinate status     Show whether the macOS caffeinate hold is active
-livelapse logs <feed-name>      Tail logs for a feed (journalctl wrapper)
-livelapse preview <feed-name>   Render a point-in-time MP4 from current frames
+livelapse start [feed-name]       Start all feeds, or a specific feed
+livelapse stop [feed-name]        Stop all feeds, or a specific feed
 livelapse add <name> <url> [fps]  Add a new feed and start capture immediately
-livelapse remove <name>         Stop and remove a feed (frames kept by default)
-livelapse stitch <name> [opts]  Assemble captured frames into a timelapse video
-livelapse peek <feed-name>      Output the most recent frame to stdout
-livelapse disk                  Disk usage summary per feed and total
+livelapse remove <name>           Stop and remove a feed (frames kept by default)
+livelapse stitch <name> [opts]    Assemble captured frames into a timelapse video
+livelapse peek <feed-name>        Output the most recent frame to stdout
+livelapse disk                    Disk usage summary per feed and total
 ```
 
-Planned behavior notes:
+Behavior notes:
+- `start` / `stop` without a feed name will offer an interactive selector in a TTY
+- Stopping and restarting a feed resumes capture in the same directory; gaps are expected and no backfill is attempted
+- `stitch` will share the `--add-timestamp` / `--timestamp-tz` overlay path with `preview`
 
-- When `start` or `stop` are run without a feed name in an interactive terminal, the CLI should offer a feed selector instead of forcing the user to retype names
-- Stopping a feed and starting it again should resume future capture in the same directory; gaps during the stopped interval are expected and no backfill is attempted
-
-### Stitching
+### Stitching (planned)
 
 ```bash
 livelapse stitch artemis-main \
@@ -144,13 +187,20 @@ livelapse stitch artemis-main \
   --output ./output/flyby.mp4
 ```
 
-Options:
-- `--start` / `--end` — ISO 8601 timestamps for time-range filtering
-- `--playback-fps` — Output video frame rate (default: 30)
-- `--output` — Output path (default: `$LIVELAPSE_DATA_DIR/output/<feed>_<start>_<end>.mp4`)
-- `--codec` — `libx264` (default) or `libx265`
-- `--quality` — CRF value, lower = better (default: 18)
-- `--dry-run` — Print frame count and estimated duration without encoding
+Options: `--start` / `--end` (ISO 8601), `--playback-fps` (default 30), `--output`, `--codec` (`libx264` / `libx265`), `--quality` (CRF, lower = better), `--dry-run`.
+
+---
+
+## How It Works
+
+Each feed runs as a systemd service (`livelapse@<feed-name>.service`) wrapping a `yt-dlp | ffmpeg` pipeline:
+
+- `yt-dlp` resolves the stream URL and pipes video to ffmpeg
+- `ffmpeg` extracts frames at the configured rate, writing each as a timestamped file
+- On stream drop, the service waits `RETRY_DELAY` seconds and reconnects automatically
+- Filenames use `-strftime 1` so they reflect real wall-clock time — restarts produce no collisions and no gaps to reconcile
+
+Health checks run every 60 seconds via cron, checking frame age per feed and disk usage. Alerts are rate-limited to one per 10 minutes per feed per alert type.
 
 ---
 
@@ -158,20 +208,30 @@ Options:
 
 ```
 livelapse/
-├── feeds.conf                  # Feed definitions
-├── .env.example                # Config template
-├── next_steps.md               # Short implementation plan
+├── AGENTS.md                       # Agent instructions — source of truth (Codex, OpenCode)
+├── CLAUDE.md -> AGENTS.md          # Symlink for Claude Code
+├── feeds.conf                      # Feed definitions
+├── .env.example                    # Config template
+├── next_steps.md                   # Implementation plan
 ├── bin/
-│   ├── livelapse               # CLI entrypoint
-│   ├── capture.sh              # Per-feed capture loop (spawned by systemd)
-│   └── common.sh               # Shared shell helpers
+│   ├── livelapse                   # CLI entrypoint
+│   ├── capture.sh                  # Per-feed capture loop
+│   └── common.sh                   # Shared shell helpers
 ├── docs/
-│   ├── livelapse-spec.md       # Original spec
-│   └── macos-runbook.md        # Current local operation commands
+│   ├── macos-runbook.md            # Current macOS operation guide
+│   ├── cross-agent-skills-deployment-guide.md
+│   └── livelapse-spec.md           # Original spec
 ├── install/
-│   └── install.sh              # Install deps and Linux systemd units
-└── templates/
-    └── livelapse@.service      # Systemd template unit
+│   └── install.sh                  # Install deps + Linux systemd units
+├── templates/
+│   └── livelapse@.service          # Systemd template unit
+├── .agents/
+│   └── skills/
+│       └── livelapse-ops/          # Operations skill (Codex, OpenCode)
+│           └── SKILL.md
+└── .claude/
+    └── skills/
+        └── livelapse-ops -> ...    # Symlink for Claude Code
 ```
 
 ### Captured data
@@ -188,19 +248,6 @@ livelapse/
 
 ---
 
-## How It Works
-
-Each feed runs as a systemd service (`livelapse@<feed-name>.service`) that keeps a `yt-dlp | ffmpeg` pipeline alive:
-
-- `yt-dlp` resolves the stream URL and pipes the video to ffmpeg
-- `ffmpeg` extracts frames at the configured rate, writing each as a timestamped file
-- On stream drop, the service waits `RETRY_DELAY` seconds and reconnects automatically
-- Filenames use `-strftime 1` so they reflect real wall-clock time — restarts produce no filename collisions and no gaps to reconcile
-
-Health checks run every 60 seconds via cron, checking frame age per feed and overall disk usage. Alerts are rate-limited to one per 10 minutes per feed per alert type.
-
----
-
 ## Platform Compatibility
 
 | Feature | macOS | Linux (Ubuntu 24+) |
@@ -209,10 +256,7 @@ Health checks run every 60 seconds via cron, checking frame age per feed and ove
 | Process management | Background process + PID file | systemd template units |
 | Logs | `.pids/<feed>.log` | `journalctl -u livelapse@<feed>` |
 | Health check | User crontab | `/etc/cron.d/livelapse` |
-
-Run on macOS for local testing with a local data directory, deploy to Linux for production capture.
-
-On macOS, keep the machine awake during long local captures with `bin/livelapse caffeinate start`.
+| Sleep prevention | `livelapse caffeinate start` | Not needed |
 
 ---
 
@@ -232,13 +276,34 @@ For a 3-feed, 3-day capture: 250 GB volume, 2 vCPU / 2 GB RAM droplet.
 
 ## DigitalOcean Provisioning (Planned)
 
-`doctl`-based provisioning is still planned work.
+`install/do-provision.sh` is planned work. The intended order:
 
-The intended order is:
+1. Finish the local CLI backfill (`start`, `stop`)
+2. Validate one manual Ubuntu deployment end-to-end
+3. Add `install/do-provision.sh` once the infrastructure shape is proven
 
-1. finish the local CLI backfill
-2. validate one manual Ubuntu deployment end-to-end
-3. then add `install/do-provision.sh` once the infrastructure shape is proven
+See [next_steps.md](next_steps.md) for the full implementation sequence.
+
+---
+
+## Badges
+
+To be added once CI and the first release are in place. Replace the `<!-- badges -->` comment at the top of this file when ready:
+
+| Badge | Add when |
+|---|---|
+| `[![License: MIT](...)](LICENSE)` | Ready now |
+| `![Platform](... macOS \| Ubuntu 24+)` | Ready now |
+| CI status (GitHub Actions) | When the first workflow is added |
+| Latest release / version | On first tagged release |
+| GitHub stars | After public launch |
+
+To add the first two immediately:
+
+```markdown
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Ubuntu%2024%2B-blue)
+```
 
 ---
 

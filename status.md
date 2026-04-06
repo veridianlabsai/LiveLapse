@@ -38,6 +38,7 @@
   - `status` to report configured feeds, running state, latest frame timestamp, and frame count
   - `logs <feed-name>` to tail local macOS capture logs while keeping a Linux `journalctl` path open for later
   - `preview <feed-name>` to build point-in-time MP4 previews from current frames without stopping capture
+  - `preview --add-timestamp [--timestamp-tz <zone>]` to burn per-frame capture timestamps derived from the filenames into preview videos
 - Added follow-on planning and local ops docs:
   - [next_steps.md](/Users/liam/Documents/dev/veridian-labs/livelapse/next_steps.md) for the CLI backfill and deployment sequence
   - [docs/macos-runbook.md](/Users/liam/Documents/dev/veridian-labs/livelapse/docs/macos-runbook.md) for the current manual macOS capture workflow and preview-video commands
@@ -45,6 +46,7 @@
   - [README.md](/Users/liam/Documents/dev/veridian-labs/livelapse/README.md) now lists the currently implemented inspection/preview commands and keeps `start|stop` as post-soak work
   - [docs/macos-runbook.md](/Users/liam/Documents/dev/veridian-labs/livelapse/docs/macos-runbook.md) now uses the CLI for `status`, `logs`, and `preview` while leaving manual feed start/stop in place
   - [next_steps.md](/Users/liam/Documents/dev/veridian-labs/livelapse/next_steps.md) now sequences non-disruptive local CLI hardening before lifecycle control, Ubuntu validation, and `doctl`
+  - The preview docs now describe burned timestamp overlays and the Eastern-time default behavior
 - Expanded the local soak run to three active feeds from [feeds.conf](/Users/liam/Documents/dev/veridian-labs/livelapse/feeds.conf):
   - `artemis2-main`
   - `artemis2-2nd`
@@ -69,6 +71,7 @@
 - `install/install.sh` handles macOS dependency/setup and Linux systemd deployment foundations
 - `bin/livelapse caffeinate start|stop|status` controls the macOS sleep-prevention hold for local captures
 - `bin/livelapse status`, `logs <feed-name>`, and `preview <feed-name>` operate safely against the live local soak without needing to restart feeds
+- `bin/livelapse preview --add-timestamp` burns daylight-saving-aware local timestamps from the frame filenames into the rendered preview video
 - The repository is ready for continued local-first hardening, with instance work still deferred until the post-soak lifecycle CLI lands
 
 ## Issues

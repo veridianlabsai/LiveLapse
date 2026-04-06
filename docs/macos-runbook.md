@@ -121,16 +121,19 @@ This creates a point-in-time preview from the current frame set without stopping
 
 ```bash
 ./bin/livelapse preview artemis2-main
+./bin/livelapse preview artemis2-main --add-timestamp
 ```
 
 Optional overrides:
 
 ```bash
 ./bin/livelapse preview artemis2-main --playback-fps 24
+./bin/livelapse preview artemis2-main --add-timestamp --timestamp-tz America/Los_Angeles
 ./bin/livelapse preview artemis2-main --output ./tmp/artemis2-main-preview.mp4
 ```
 
 The command writes previews under `$LIVELAPSE_DATA_DIR/output/intermediate/` by default and prints the output path, frame count, and playback duration.
+When `--add-timestamp` is enabled, the overlay is derived from the UTC frame filenames and then converted to the requested display timezone. The default request is Eastern time, resolved through `America/New_York`, so daylight-saving dates render as `EDT` instead of a fixed `EST` label.
 
 ## Create Preview Videos For All Feeds
 

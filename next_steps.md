@@ -82,6 +82,7 @@ Back the documented `stitch` command into a real script and wire it into the CLI
 Expected behavior:
 
 - Support a feed name plus optional start, end, playback fps, codec, quality, output, and dry-run flags
+- Reuse the preview timestamp-overlay path for `--add-timestamp` and `--timestamp-tz`
 - Work from timestamped frame files without requiring a database
 
 ## Documentation Cleanup

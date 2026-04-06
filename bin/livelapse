@@ -15,7 +15,7 @@ usage() {
 Usage:
   bin/livelapse status
   bin/livelapse logs <feed-name> [--lines <n>] [--follow|--no-follow]
-  bin/livelapse preview <feed-name> [--playback-fps <fps>] [--output <path>]
+  bin/livelapse preview <feed-name> [--playback-fps <fps>] [--output <path>] [--add-timestamp] [--timestamp-tz <zone>]
   bin/livelapse caffeinate start
   bin/livelapse caffeinate stop
   bin/livelapse caffeinate status
@@ -25,6 +25,7 @@ EOF
 CAFFEINATE_LABEL="com.veridian.livelapse.caffeinate"
 DEFAULT_LOG_LINES=50
 DEFAULT_PREVIEW_FPS=30
+DEFAULT_TIMESTAMP_TZ="est"
 PREVIEW_STAGE_DIR=""
 PREVIEW_PROGRESS_INTERVAL=500
 
@@ -355,6 +356,117 @@ cleanup_preview_stage() {
   fi
 }
 
+generate_timestamp_subtitles() {
+  local manifest_file="$1"
+  local subtitles_file="$2"
+  local playback_fps="$3"
+  local requested_tz="$4"
+
+  python3 - "$manifest_file" "$subtitles_file" "$playback_fps" "$requested_tz" <<'PY'
+from __future__ import annotations
+
+import sys
+from datetime import datetime, timezone
+from pathlib import Path
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+
+
+def ass_time(seconds: float) -> str:
+    total_centis = int(round(seconds * 100))
+    hours, remainder = divmod(total_centis, 360000)
+    minutes, remainder = divmod(remainder, 6000)
+    secs, centis = divmod(remainder, 100)
+    return f"{hours}:{minutes:02d}:{secs:02d}.{centis:02d}"
+
+
+def ass_escape(text: str) -> str:
+    return text.replace("\\", r"\\").replace("{", r"\{").replace("}", r"\}")
+
+
+def resolve_timezone(requested: str) -> str:
+    aliases = {
+        "est": "America/New_York",
+        "edt": "America/New_York",
+        "et": "America/New_York",
+        "eastern": "America/New_York",
+        "pst": "America/Los_Angeles",
+        "pdt": "America/Los_Angeles",
+        "pt": "America/Los_Angeles",
+        "pacific": "America/Los_Angeles",
+        "cst": "America/Chicago",
+        "cdt": "America/Chicago",
+        "ct": "America/Chicago",
+        "mst": "America/Denver",
+        "mdt": "America/Denver",
+        "mt": "America/Denver",
+        "utc": "UTC",
+        "z": "UTC",
+    }
+    cleaned = requested.strip()
+    return aliases.get(cleaned.lower(), cleaned)
+
+
+manifest_path = Path(sys.argv[1])
+subtitles_path = Path(sys.argv[2])
+playback_fps = float(sys.argv[3])
+requested_tz = sys.argv[4]
+resolved_tz = resolve_timezone(requested_tz)
+
+try:
+    zone = ZoneInfo(resolved_tz)
+except ZoneInfoNotFoundError:
+    print(f"Unknown timezone: {requested_tz}", file=sys.stderr)
+    sys.exit(1)
+
+frame_paths = [line.strip() for line in manifest_path.read_text().splitlines() if line.strip()]
+if not frame_paths:
+    print("No frames available for timestamp subtitles", file=sys.stderr)
+    sys.exit(1)
+
+events: list[tuple[str, str, str]] = []
+first_label = ""
+
+for index, frame_path in enumerate(frame_paths):
+    frame_stem = Path(frame_path).stem
+    try:
+        captured_at_utc = datetime.strptime(frame_stem, "%Y-%m-%dT%H_%M_%SZ").replace(tzinfo=timezone.utc)
+    except ValueError:
+        print(f"Could not parse frame timestamp from {frame_path}", file=sys.stderr)
+        sys.exit(1)
+
+    captured_at_local = captured_at_utc.astimezone(zone)
+    label = captured_at_local.strftime("%Y-%m-%d %H:%M:%S %Z")
+    if not first_label:
+        first_label = label
+
+    start_time = ass_time(index / playback_fps)
+    end_time = ass_time((index + 1) / playback_fps)
+    events.append((start_time, end_time, ass_escape(label)))
+
+header = """[Script Info]
+ScriptType: v4.00+
+WrapStyle: 0
+ScaledBorderAndShadow: yes
+PlayResX: 1920
+PlayResY: 1080
+
+[V4+ Styles]
+Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
+Style: Timestamp,Arial,28,&H00FFFFFF,&H000000FF,&H00202020,&H00000000,0,0,0,0,100,100,0,0,1,2,0,3,24,24,24,1
+
+[Events]
+Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
+"""
+
+with subtitles_path.open("w", encoding="utf-8") as handle:
+    handle.write(header)
+    for start_time, end_time, label in events:
+        handle.write(f"Dialogue: 0,{start_time},{end_time},Timestamp,,0,0,0,,{label}\n")
+
+print(f"{resolved_tz}|{first_label}")
+PY
+}
+
 preview_progress_interval() {
   local total_frames="$1"
 
@@ -387,9 +499,14 @@ preview_command() {
 
   local playback_fps="$DEFAULT_PREVIEW_FPS"
   local output_path=""
+  local add_timestamp="no"
+  local timestamp_tz="$DEFAULT_TIMESTAMP_TZ"
 
   while [[ $# -gt 0 ]]; do
     case "$1" in
+      --add-timestamp)
+        add_timestamp="yes"
+        ;;
       --playback-fps)
         shift
         if [[ $# -eq 0 ]]; then
@@ -405,6 +522,15 @@ preview_command() {
           return 1
         fi
         output_path="$1"
+        ;;
+      --timestamp-tz)
+        shift
+        if [[ $# -eq 0 ]]; then
+          log "Missing value for --timestamp-tz"
+          return 1
+        fi
+        timestamp_tz="$1"
+        add_timestamp="yes"
         ;;
       *)
         log "Unknown preview option: $1"
@@ -473,6 +599,19 @@ preview_command() {
     fi
   done < "$manifest_file"
 
+  local video_filter subtitle_file resolved_timestamp_tz first_overlay_label overlay_info
+  video_filter='pad=ceil(iw/2)*2:ceil(ih/2)*2'
+
+  if [[ "$add_timestamp" == "yes" ]]; then
+    ensure_command python3
+    subtitle_file="$stage_dir/timestamp.ass"
+    overlay_info="$(generate_timestamp_subtitles "$manifest_file" "$subtitle_file" "$playback_fps" "$timestamp_tz")"
+    IFS='|' read -r resolved_timestamp_tz first_overlay_label <<<"$overlay_info"
+    log "Timestamp overlay enabled (requested $timestamp_tz, resolved $resolved_timestamp_tz)"
+    log "First burned label: $first_overlay_label"
+    video_filter="${video_filter},ass='${subtitle_file}'"
+  fi
+
   log "Starting ffmpeg render at ${playback_fps} fps"
 
   if [[ -t 2 ]]; then
@@ -484,7 +623,7 @@ preview_command() {
       -stats \
       -framerate "$playback_fps" \
       -i "$stage_dir/%06d.${frame_ext}" \
-      -vf 'pad=ceil(iw/2)*2:ceil(ih/2)*2' \
+      -vf "$video_filter" \
       -c:v libx264 \
       -pix_fmt yuv420p \
       -movflags +faststart \
@@ -496,7 +635,7 @@ preview_command() {
       -loglevel error \
       -framerate "$playback_fps" \
       -i "$stage_dir/%06d.${frame_ext}" \
-      -vf 'pad=ceil(iw/2)*2:ceil(ih/2)*2' \
+      -vf "$video_filter" \
       -c:v libx264 \
       -pix_fmt yuv420p \
       -movflags +faststart \
