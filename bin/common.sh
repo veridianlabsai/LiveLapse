@@ -102,13 +102,14 @@ list_feed_records() {
       gsub(/^[[:space:]]+|[[:space:]]+$/, "", $1)
       gsub(/^[[:space:]]+|[[:space:]]+$/, "", $2)
       gsub(/^[[:space:]]+|[[:space:]]+$/, "", $3)
+      gsub(/^[[:space:]]+|[[:space:]]+$/, "", $4)
       if ($1 == "" || $2 == "") {
         next
       }
       if ($3 == "") {
         $3 = "1"
       }
-      print $1 "|" $2 "|" $3
+      print $1 "|" $2 "|" $3 "|" $4
     }
   ' "$LIVELAPSE_ROOT/feeds.conf"
 }

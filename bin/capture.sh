@@ -115,8 +115,8 @@ main() {
     exit 1
   fi
 
-  local name url fps
-  IFS='|' read -r name url fps <<<"$record"
+  local name url fps max_hours=""
+  IFS='|' read -r name url fps max_hours <<<"$record"
 
   validate_feed_name "$name"
   warn_if_high_fps "$fps"
@@ -130,7 +130,20 @@ main() {
 
   local output_pattern="$output_dir/%Y-%m-%dT%H_%M_%SZ.$FF_OUTPUT_EXT"
 
+  local start_time
+  start_time=$(date +%s)
+
   while true; do
+    # Check max duration before attempting another capture cycle
+    if [[ -n "$max_hours" ]]; then
+      local now
+      now=$(date +%s)
+      if awk "BEGIN { exit !(($now - $start_time) >= ($max_hours * 3600)) }"; then
+        log "Max capture duration of ${max_hours}h reached, stopping"
+        exit 0
+      fi
+    fi
+
     local input_url="$url"
     if ! is_direct_ffmpeg_input "$url"; then
       log "Resolving stream URL for $name"
@@ -146,6 +159,16 @@ main() {
     local exit_code=0
     if ! run_ffmpeg_capture "$input_url" "$url" "$fps" "$output_pattern"; then
       exit_code=$?
+    fi
+
+    # For yt-dlp sources, check if the stream is still live before retrying
+    if ! is_direct_ffmpeg_input "$url"; then
+      local is_live=""
+      is_live=$(yt-dlp --print is_live --no-download "$url" 2>/dev/null || true)
+      if [[ "$is_live" == "False" ]]; then
+        log "Stream is no longer live (yt-dlp: is_live=False), stopping capture"
+        exit 0
+      fi
     fi
 
     log "Capture loop exited for $name with code $exit_code; retrying in ${LIVELAPSE_RETRY_DELAY}s"

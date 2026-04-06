@@ -13,7 +13,7 @@ Read the full README above before taking action. It is the source of truth for t
 | `bin/livelapse` | CLI entrypoint — all agent-facing commands live here |
 | `bin/capture.sh` | Per-feed capture loop spawned by the CLI or systemd |
 | `bin/common.sh` | Shared shell helpers (env loading, feed parsing, PID utilities) |
-| `feeds.conf` | Pipe-delimited feed definitions: `name\|url\|fps` |
+| `feeds.conf` | Pipe-delimited feed definitions: `name\|url\|fps\|max_hours` (max_hours optional) |
 | `.env` | Runtime config — sourced at startup, never tracked in git |
 | `.env.example` | Config template — read this, never `.env` |
 | `docs/macos-runbook.md` | Current macOS operations guide |

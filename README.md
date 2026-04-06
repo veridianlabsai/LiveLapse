@@ -68,7 +68,7 @@ git clone https://github.com/veridian-labs/livelapse /opt/livelapse
 cd /opt/livelapse
 
 # 2. Configure feeds
-# Edit feeds.conf — add your streams (name|url|fps)
+# Edit feeds.conf — add your streams (name|url|fps|max_hours)
 
 # 3. Configure environment
 cp .env.example .env
@@ -130,14 +130,15 @@ This pattern — `AGENTS.md` as the repo's standing brief, skills as operational
 Pipe-delimited, one feed per line. Comments start with `#`.
 
 ```
-# name|url|fps
-artemis-main|https://www.youtube.com/live/5flTTJuoExo|1
+# name|url|fps|max_hours
+artemis-main|https://www.youtube.com/live/5flTTJuoExo|1|48
 construction-cam|rtsp://192.168.1.100/stream|0.2
 ```
 
 - **name** — Alphanumeric + hyphens. Used as the folder name and systemd instance identifier.
 - **url** — Any URL supported by yt-dlp, or a direct ffmpeg input (RTSP, HLS, RTMP, etc.).
 - **fps** — Frames per second. `0.2` = one frame every 5 s, `0.5` = one every 2 s.
+- **max_hours** — Optional. Stop capture automatically after this many hours. Omit or leave blank to run indefinitely. For yt-dlp sources, capture also stops automatically when the stream ends (detected via `is_live` check on reconnect).
 - One feed name maps to one capture process. To run the same source twice, duplicate the entry with a new name.
 
 ### `.env`
