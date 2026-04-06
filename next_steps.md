@@ -5,17 +5,16 @@ This file tracks the immediate follow-on work after the Phase 0 local macOS soak
 ## Current Position
 
 - `bin/capture.sh` works for local frame capture
-- `bin/livelapse` currently supports `status`, `logs <feed-name>`, and `preview <feed-name>` plus `caffeinate start|stop|status` on macOS
-- macOS local capture is still being managed manually with background `bin/capture.sh` processes
+- `bin/livelapse` now supports `status`, `start`, `stop`, `logs <feed-name>`, and `preview <feed-name>` plus `caffeinate start|stop|status` on macOS
+- macOS local capture can now be managed through the CLI with interactive selectors, confirmations, and `--dry-run` guardrails
 - Linux deployment has install and systemd scaffolding, but has not been validated end-to-end on Ubuntu yet
 - DigitalOcean block storage automation is still planned work, not current implementation
 
 ## Priority Order
 
-1. Harden the non-disruptive local CLI surface during the macOS soak
-2. Backfill feed lifecycle commands after the soak completes
-3. Validate Ubuntu end-to-end manually
-4. Only then automate infrastructure steps such as `doctl`
+1. Live-validate the new lifecycle commands after the macOS soak finishes
+2. Validate Ubuntu end-to-end manually
+3. Only then automate infrastructure steps such as `doctl`
 
 ## Immediate Local CLI Hardening
 
@@ -52,12 +51,12 @@ Acceptance criteria:
 - Capture continues while preview rendering runs
 - Preview output is playable in QuickTime and VLC
 
-### 3. Feed lifecycle commands after the soak
+### 3. Feed lifecycle validation after the soak
 
-Implement these commands in `bin/livelapse` once the active local soak is finished:
+Exercise the new lifecycle commands in `bin/livelapse` once the active local soak is finished:
 
-- `start [feed-name]`
-- `stop [feed-name]`
+- `start [feed-name] [--dry-run]`
+- `stop [feed-name] [--dry-run] [--yes]`
 
 Expected behavior:
 
@@ -65,12 +64,13 @@ Expected behavior:
 - Store feed PIDs in `.pids/<feed>.pid`
 - Store feed logs in `.pids/<feed>.log`
 - `stop` should gracefully stop one feed or all tracked feeds
-- In an interactive terminal, omitting the feed name should offer a feed selector instead of forcing manual re-entry
+- In an interactive terminal, omitting the feed name should offer an operation-aware selector instead of forcing manual re-entry
+- `stop` should confirm before touching live feeds, and `start` should refuse to silently duplicate an already-running feed
 - Stopping and later starting the same feed should resume future capture in the same directory; the stopped interval is an expected gap and no backfill is attempted
 
 Acceptance criteria:
 
-- Starting all feeds from the CLI recreates the same behavior as the current manual `nohup` workflow
+- Starting stopped feeds from the CLI recreates the same behavior as the current manual `nohup` workflow
 - Re-running `start` does not duplicate already-running feeds
 - `stop` terminates the entire capture process group cleanly
 - Restarting a stopped feed resumes new frames without touching existing ones

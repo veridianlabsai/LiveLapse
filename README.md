@@ -70,7 +70,7 @@ cp .env.example .env
 ./install.sh
 
 # 5. Start capture
-# macOS: see docs/macos-runbook.md for the current manual workflow
+# macOS: ./bin/livelapse start
 # Linux: systemctl start livelapse@<feed-name>
 ```
 
@@ -93,6 +93,7 @@ construction-cam|rtsp://192.168.1.100/stream|0.2
 - **name** — Alphanumeric + hyphens. Used as the folder name and systemd instance identifier.
 - **url** — Any URL supported by yt-dlp, or a direct ffmpeg input (RTSP, HLS, RTMP, etc.).
 - **fps** — Frames per second. `0.2` = one frame every 5 s, `0.5` = one every 2 s.
+- One feed name maps to one capture process. To run the same source twice, duplicate the entry with a new name.
 
 ### `.env`
 
@@ -126,6 +127,13 @@ HEALTHCHECK_DISK_THRESHOLD=80  # Disk usage % threshold
 
 ```bash
 ./bin/livelapse status                                  # Feed table: state, PID, last frame, count
+./bin/livelapse start                                  # Interactive picker of stopped feeds in a TTY
+./bin/livelapse start artemis-main
+./bin/livelapse start artemis-main --dry-run
+./bin/livelapse stop                                   # Interactive picker of running feeds in a TTY
+./bin/livelapse stop artemis-main
+./bin/livelapse stop artemis-main --dry-run
+./bin/livelapse stop artemis-main --yes                # Skip confirmation in non-interactive use
 ./bin/livelapse logs <feed-name>                        # Tail feed log (auto-follow in a TTY)
 ./bin/livelapse logs <feed-name> --follow               # Always follow
 ./bin/livelapse logs <feed-name> --lines 100            # Set line count
@@ -145,13 +153,17 @@ HEALTHCHECK_DISK_THRESHOLD=80  # Disk usage % threshold
 - `--timestamp-tz <zone>` sets the display timezone; common aliases (`utc`, `et`, `est`, `edt`, `pt`, `pst`, `pdt`) are accepted
 - Default is Eastern time — resolves to `America/New_York`, so DST dates show `EDT` automatically
 
-For feed `start` and `stop`, use the manual workflow in [docs/macos-runbook.md](docs/macos-runbook.md) until those commands are backfilled.
+Lifecycle notes:
+
+- `start` without a feed name offers a selector of currently stopped feeds in a TTY; non-interactive use targets all stopped feeds
+- `stop` without a feed name offers a selector of currently running feeds in a TTY; non-interactive use targets all running feeds and requires `--yes`
+- `stop` always asks for confirmation in an interactive terminal
+- `start <feed-name>` checks whether that feed is already running and offers a stop-and-restart path instead of silently duplicating it
+- During an active soak, prefer `--dry-run` first to confirm the target set before touching live captures
 
 ### Planned next
 
 ```
-livelapse start [feed-name]       Start all feeds, or a specific feed
-livelapse stop [feed-name]        Stop all feeds, or a specific feed
 livelapse add <name> <url> [fps]  Add a new feed and start capture immediately
 livelapse remove <name>           Stop and remove a feed (frames kept by default)
 livelapse stitch <name> [opts]    Assemble captured frames into a timelapse video
@@ -160,8 +172,9 @@ livelapse disk                    Disk usage summary per feed and total
 ```
 
 Behavior notes:
-- `start` / `stop` without a feed name will offer an interactive selector in a TTY
+- `start` / `stop` without a feed name offer operation-aware selectors in a TTY
 - Stopping and restarting a feed resumes capture in the same directory; gaps are expected and no backfill is attempted
+- Duplicate the `feeds.conf` entry under a new feed name if you want a second concurrent capture from the same source
 - `stitch` will share the `--add-timestamp` / `--timestamp-tz` overlay path with `preview`
 
 ### Stitching (planned)

@@ -2,16 +2,14 @@
 
 This document describes the current Phase 0 macOS workflow.
 
-Use this runbook until feed lifecycle and preview commands are fully backed into `bin/livelapse`.
-
 ## Current Implementation Status
 
 - `./install.sh` installs local dependencies and creates a local `.env` if needed
-- `./bin/capture.sh <feed-name>` runs a single capture loop
-- `./bin/livelapse status`, `logs <feed-name>`, and `preview <feed-name>` are available for local inspection without disturbing capture
+- `./bin/capture.sh <feed-name>` remains the per-feed capture loop used under the CLI
+- `./bin/livelapse status`, `start`, `stop`, `logs <feed-name>`, and `preview <feed-name>` are available locally
 - `./bin/livelapse caffeinate start|stop|status` manages the macOS no-sleep hold
-- Feed `start|stop` commands are still intentionally manual until the current soak finishes
-- When CLI `stop` and `start` land later, restarting a stopped feed should resume future capture only; gaps while stopped are expected
+- Restarting a stopped feed resumes future capture only; gaps while stopped are expected
+- During a live soak, use `--dry-run` first before touching active feeds
 
 ## One-Time Setup
 
@@ -52,32 +50,26 @@ Note:
 ## Start A Single Feed
 
 ```bash
-mkdir -p .pids
-nohup ./bin/capture.sh artemis2-main > .pids/artemis2-main.log 2>&1 < /dev/null &
-echo $! > .pids/artemis2-main.pid
+./bin/livelapse start artemis2-main
 ```
 
-## Start All Feeds In `feeds.conf`
+## Start Without Naming A Feed
 
 ```bash
-mkdir -p .pids
-
-while IFS= read -r feed_name; do
-  nohup ./bin/capture.sh "$feed_name" > ".pids/$feed_name.log" 2>&1 < /dev/null &
-  echo $! > ".pids/$feed_name.pid"
-done < <(
-  awk -F'|' '
-    /^[[:space:]]*#/ { next }
-    /^[[:space:]]*$/ { next }
-    {
-      gsub(/^[[:space:]]+|[[:space:]]+$/, "", $1)
-      if ($1 != "") {
-        print $1
-      }
-    }
-  ' feeds.conf
-)
+./bin/livelapse start
 ```
+
+In an interactive terminal this opens a picker of currently stopped feeds. In non-interactive use it targets all stopped feeds.
+
+## Dry-Run A Start First
+
+```bash
+./bin/livelapse start artemis2-main --dry-run
+./bin/livelapse start --dry-run
+```
+
+If a feed is already running, `start <feed-name>` offers a stop-and-restart path instead of silently launching a duplicate.
+If you truly want two concurrent captures from the same source, duplicate the `feeds.conf` entry with a new feed name.
 
 ## Check Running Feeds
 
@@ -94,17 +86,24 @@ done < <(
 ## Stop A Single Feed
 
 ```bash
-kill "$(tr -d '[:space:]' < .pids/artemis2-main.pid)"
-rm -f .pids/artemis2-main.pid
+./bin/livelapse stop artemis2-main
 ```
 
-## Stop All Feeds
+`stop` asks for confirmation in an interactive terminal. In non-interactive use, pass `--yes` if you really mean it.
+
+## Stop Without Naming A Feed
 
 ```bash
-for pid_file in .pids/*.pid; do
-  kill "$(tr -d '[:space:]' < "$pid_file")"
-done
-rm -f .pids/*.pid
+./bin/livelapse stop
+```
+
+In an interactive terminal this opens a picker of currently running feeds. In non-interactive use it targets all running feeds.
+
+## Dry-Run A Stop First
+
+```bash
+./bin/livelapse stop artemis2-main --dry-run
+./bin/livelapse stop --dry-run
 ```
 
 ## Frame Output
@@ -137,4 +136,4 @@ When `--add-timestamp` is enabled, the overlay is derived from the UTC frame fil
 
 ## Create Preview Videos For All Feeds
 
-Repeat the one-feed preview command for each feed listed in `feeds.conf`, or script around it once the broader CLI lifecycle surface is added.
+Repeat the one-feed preview command for each feed listed in `feeds.conf`, or script around it once the broader CLI surface is expanded further.
