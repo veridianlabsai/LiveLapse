@@ -90,6 +90,7 @@ run_ffmpeg_capture() {
     -map 0:v:0 \
     -an \
     -vf "fps=${fps}" \
+    -f image2 \
     -strftime 1 \
     "${FF_OUTPUT_ARGS[@]}" \
     "$output_pattern"

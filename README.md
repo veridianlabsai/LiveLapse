@@ -1,5 +1,7 @@
 # LiveLapse
 
+> **Status:** Under active development for the Artemis II lunar flyby (April 6, 2026). First release coming soon.
+
 Self-hosted timelapse capture from live streams. Pull timestamped frames from YouTube, RTSP, or any yt-dlp/ffmpeg-compatible source and stitch them into videos. Runs headless on Linux via systemd, with email alerting and a simple CLI.
 
 Built to capture NASA's Artemis II lunar flyby across multiple feeds simultaneously.
