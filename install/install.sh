@@ -119,14 +119,14 @@ main() {
   create_default_env_if_missing
   load_env
 
-  mkdir -p "$LIVELAPSE_DATA_DIR"
-
   case "$(os_name)" in
     Darwin)
+      mkdir -p "$LIVELAPSE_DATA_DIR"
       install_darwin_dependencies
       log "Local macOS setup complete. Run bin/capture.sh <feed-name> to verify capture."
       ;;
     Linux)
+      run_as_root mkdir -p "$LIVELAPSE_DATA_DIR"
       install_linux_dependencies
       deploy_systemd_template
       start_linux_services

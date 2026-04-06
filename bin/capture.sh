@@ -82,7 +82,7 @@ run_ffmpeg_capture() {
     fi
   fi
 
-  ffmpeg \
+  TZ=UTC ffmpeg \
     -hide_banner \
     -loglevel warning \
     -nostdin \
