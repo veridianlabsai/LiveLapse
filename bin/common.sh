@@ -23,6 +23,21 @@ is_linux() {
   [[ "$(os_name)" == "Linux" ]]
 }
 
+run_as_root() {
+  if [[ "$(id -u)" -eq 0 ]]; then
+    "$@"
+    return
+  fi
+
+  if command -v sudo >/dev/null 2>&1; then
+    sudo "$@"
+    return
+  fi
+
+  log "This action requires root privileges: $*"
+  return 1
+}
+
 realpath_portable() {
   python3 - "$1" <<'PY'
 import os
@@ -125,4 +140,59 @@ ensure_command() {
     log "Missing required command: $cmd"
     return 1
   fi
+}
+
+pids_dir() {
+  printf '%s/.pids\n' "$LIVELAPSE_ROOT"
+}
+
+ensure_pids_dir() {
+  mkdir -p "$(pids_dir)"
+}
+
+read_pid_file() {
+  local pid_file="$1"
+
+  [[ -f "$pid_file" ]] || return 1
+  tr -d '[:space:]' <"$pid_file"
+}
+
+pid_is_running() {
+  local pid="${1:-}"
+
+  [[ -n "$pid" ]] || return 1
+  kill -0 "$pid" 2>/dev/null
+}
+
+cleanup_stale_pid_file() {
+  local pid_file="$1"
+  local pid=""
+
+  if ! pid="$(read_pid_file "$pid_file" 2>/dev/null)"; then
+    return 0
+  fi
+
+  if ! pid_is_running "$pid"; then
+    rm -f "$pid_file"
+  fi
+}
+
+feed_pid_file() {
+  local feed_name="$1"
+
+  printf '%s/%s.pid\n' "$(pids_dir)" "$feed_name"
+}
+
+feed_log_file() {
+  local feed_name="$1"
+
+  printf '%s/%s.log\n' "$(pids_dir)" "$feed_name"
+}
+
+caffeinate_pid_file() {
+  printf '%s/caffeinate.pid\n' "$(pids_dir)"
+}
+
+caffeinate_log_file() {
+  printf '%s/caffeinate.log\n' "$(pids_dir)"
 }
