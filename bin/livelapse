@@ -13,6 +13,9 @@ source "$SCRIPT_DIR/common.sh"
 usage() {
   cat <<'EOF' >&2
 Usage:
+  bin/livelapse status
+  bin/livelapse logs <feed-name> [--lines <n>] [--follow|--no-follow]
+  bin/livelapse preview <feed-name> [--playback-fps <fps>] [--output <path>]
   bin/livelapse caffeinate start
   bin/livelapse caffeinate stop
   bin/livelapse caffeinate status
@@ -20,6 +23,10 @@ EOF
 }
 
 CAFFEINATE_LABEL="com.veridian.livelapse.caffeinate"
+DEFAULT_LOG_LINES=50
+DEFAULT_PREVIEW_FPS=30
+PREVIEW_STAGE_DIR=""
+PREVIEW_PROGRESS_INTERVAL=500
 
 ensure_darwin() {
   if ! is_darwin; then
@@ -149,12 +156,383 @@ caffeinate_status() {
   printf 'caffeinate stopped\n'
 }
 
+ensure_feed_exists() {
+  local feed_name="$1"
+
+  validate_feed_name "$feed_name"
+
+  if ! feed_record_by_name "$feed_name" >/dev/null; then
+    log "Feed not found in feeds.conf: $feed_name"
+    return 1
+  fi
+}
+
+feed_data_dir() {
+  local feed_name="$1"
+  local data_dir="$2"
+
+  printf '%s/%s\n' "$data_dir" "$feed_name"
+}
+
+latest_frame_path() {
+  local feed_dir="$1"
+  local frame_ext="$2"
+  local latest_frame=""
+
+  [[ -d "$feed_dir" ]] || return 1
+
+  latest_frame="$(find "$feed_dir" -maxdepth 1 -type f -name "*.${frame_ext}" | LC_ALL=C sort | tail -n 1)"
+  [[ -n "$latest_frame" ]] || return 1
+
+  printf '%s\n' "$latest_frame"
+}
+
+frame_count() {
+  local feed_dir="$1"
+  local frame_ext="$2"
+
+  if [[ ! -d "$feed_dir" ]]; then
+    printf '0\n'
+    return 0
+  fi
+
+  find "$feed_dir" -maxdepth 1 -type f -name "*.${frame_ext}" | wc -l | tr -d '[:space:]'
+}
+
+frame_timestamp_for_display() {
+  local frame_path="$1"
+  local basename="${frame_path##*/}"
+  local stem="${basename%.*}"
+
+  printf '%s\n' "${stem//_/:}"
+}
+
+status_command() {
+  ensure_feeds_exist
+  ensure_pids_dir
+  load_env
+
+  local data_dir frame_ext
+  data_dir="$(resolved_data_dir)"
+  frame_ext="$(frame_file_extension)"
+
+  printf '%-16s %-8s %-8s %-22s %s\n' "FEED" "STATE" "PID" "LAST_FRAME_UTC" "FRAMES"
+
+  while IFS= read -r feed_name; do
+    local pid_file pid state feed_dir last_frame count
+    pid_file="$(feed_pid_file "$feed_name")"
+    cleanup_stale_pid_file "$pid_file"
+
+    state="stopped"
+    pid="-"
+    if pid="$(read_pid_file "$pid_file" 2>/dev/null)" && pid_is_running "$pid"; then
+      state="running"
+    else
+      pid="-"
+    fi
+
+    feed_dir="$(feed_data_dir "$feed_name" "$data_dir")"
+    last_frame="-"
+    if last_frame="$(latest_frame_path "$feed_dir" "$frame_ext" 2>/dev/null)"; then
+      last_frame="$(frame_timestamp_for_display "$last_frame")"
+    else
+      last_frame="-"
+    fi
+
+    count="$(frame_count "$feed_dir" "$frame_ext")"
+
+    printf '%-16s %-8s %-8s %-22s %s\n' "$feed_name" "$state" "$pid" "$last_frame" "$count"
+  done < <(list_feed_names)
+}
+
+should_follow_logs() {
+  local follow_mode="$1"
+
+  case "$follow_mode" in
+    yes)
+      return 0
+      ;;
+    no)
+      return 1
+      ;;
+    auto)
+      [[ -t 1 ]]
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+logs_command() {
+  local feed_name="${1:-}"
+  shift || true
+
+  if [[ -z "$feed_name" ]]; then
+    usage
+    return 1
+  fi
+
+  ensure_feeds_exist
+  ensure_feed_exists "$feed_name"
+  ensure_pids_dir
+
+  local lines="$DEFAULT_LOG_LINES"
+  local follow_mode="auto"
+
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --lines|-n)
+        shift
+        if [[ $# -eq 0 ]]; then
+          log "Missing value for --lines"
+          return 1
+        fi
+        lines="$1"
+        ;;
+      --follow)
+        follow_mode="yes"
+        ;;
+      --no-follow)
+        follow_mode="no"
+        ;;
+      *)
+        log "Unknown logs option: $1"
+        return 1
+        ;;
+    esac
+    shift
+  done
+
+  if [[ ! "$lines" =~ ^[0-9]+$ ]] || (( lines <= 0 )); then
+    log "--lines must be a positive integer"
+    return 1
+  fi
+
+  if is_linux; then
+    ensure_command journalctl
+    if should_follow_logs "$follow_mode"; then
+      exec journalctl -u "livelapse@${feed_name}" -n "$lines" -f
+    fi
+    journalctl -u "livelapse@${feed_name}" -n "$lines"
+    return 0
+  fi
+
+  local log_file
+  log_file="$(feed_log_file "$feed_name")"
+
+  if [[ ! -f "$log_file" ]]; then
+    log "No local log file found for $feed_name at $log_file"
+    return 1
+  fi
+
+  if should_follow_logs "$follow_mode"; then
+    exec tail -n "$lines" -f "$log_file"
+  fi
+
+  tail -n "$lines" "$log_file"
+}
+
+validate_positive_number() {
+  local value="$1"
+  local label="$2"
+
+  if [[ ! "$value" =~ ^[0-9]+([.][0-9]+)?$ ]]; then
+    log "$label must be numeric"
+    return 1
+  fi
+
+  if ! awk "BEGIN { exit !($value > 0) }"; then
+    log "$label must be greater than 0"
+    return 1
+  fi
+}
+
+cleanup_preview_stage() {
+  if [[ -n "${PREVIEW_STAGE_DIR:-}" ]]; then
+    rm -rf "$PREVIEW_STAGE_DIR"
+    PREVIEW_STAGE_DIR=""
+  fi
+}
+
+preview_progress_interval() {
+  local total_frames="$1"
+
+  if (( total_frames <= 200 )); then
+    printf '50\n'
+    return 0
+  fi
+
+  if (( total_frames <= 1000 )); then
+    printf '100\n'
+    return 0
+  fi
+
+  printf '%s\n' "$PREVIEW_PROGRESS_INTERVAL"
+}
+
+preview_command() {
+  local feed_name="${1:-}"
+  shift || true
+
+  if [[ -z "$feed_name" ]]; then
+    usage
+    return 1
+  fi
+
+  ensure_feeds_exist
+  ensure_feed_exists "$feed_name"
+  ensure_command ffmpeg
+  load_env
+
+  local playback_fps="$DEFAULT_PREVIEW_FPS"
+  local output_path=""
+
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --playback-fps)
+        shift
+        if [[ $# -eq 0 ]]; then
+          log "Missing value for --playback-fps"
+          return 1
+        fi
+        playback_fps="$1"
+        ;;
+      --output)
+        shift
+        if [[ $# -eq 0 ]]; then
+          log "Missing value for --output"
+          return 1
+        fi
+        output_path="$1"
+        ;;
+      *)
+        log "Unknown preview option: $1"
+        return 1
+        ;;
+    esac
+    shift
+  done
+
+  validate_positive_number "$playback_fps" "--playback-fps"
+
+  local data_dir frame_ext source_dir output_dir timestamp stage_dir manifest_file
+  data_dir="$(resolved_data_dir)"
+  frame_ext="$(frame_file_extension)"
+  source_dir="$(feed_data_dir "$feed_name" "$data_dir")"
+
+  if [[ ! -d "$source_dir" ]]; then
+    log "No frame directory found for $feed_name at $source_dir"
+    return 1
+  fi
+
+  if [[ -z "$output_path" ]]; then
+    output_dir="$data_dir/output/intermediate"
+    mkdir -p "$output_dir"
+    timestamp="$(date -u +%Y-%m-%dT%H_%M_%SZ)"
+    output_path="$output_dir/${feed_name}_${timestamp}.mp4"
+  else
+    output_path="$(realpath_portable "$output_path")"
+    mkdir -p "$(dirname "$output_path")"
+  fi
+
+  stage_dir="$(mktemp -d "${TMPDIR:-/tmp}/${feed_name}.XXXXXX")"
+  PREVIEW_STAGE_DIR="$stage_dir"
+  manifest_file="$stage_dir/frames.txt"
+
+  trap cleanup_preview_stage EXIT
+
+  log "Preparing preview for $feed_name"
+  log "Source: $source_dir"
+  log "Output: $output_path"
+  log "Scanning frame list (*.$frame_ext)"
+
+  find "$source_dir" -maxdepth 1 -type f -name "*.${frame_ext}" | LC_ALL=C sort > "$manifest_file"
+
+  local total_frames progress_interval
+  total_frames="$(wc -l < "$manifest_file" | tr -d '[:space:]')"
+
+  if [[ -z "$total_frames" || "$total_frames" == "0" ]]; then
+    log "No .$frame_ext frames found for $feed_name in $source_dir"
+    return 1
+  fi
+
+  progress_interval="$(preview_progress_interval "$total_frames")"
+  log "Found $total_frames frame(s); staging under $stage_dir"
+
+  local count=0
+  while IFS= read -r frame_path; do
+    local target_path
+    [[ -n "$frame_path" ]] || continue
+    count=$((count + 1))
+    printf -v target_path '%s/%06d.%s' "$stage_dir" "$count" "$frame_ext"
+    ln -s "$frame_path" "$target_path"
+
+    if (( count % progress_interval == 0 )) || (( count == total_frames )); then
+      log "Staged $count/$total_frames frame(s)"
+    fi
+  done < "$manifest_file"
+
+  log "Starting ffmpeg render at ${playback_fps} fps"
+
+  if [[ -t 2 ]]; then
+    ffmpeg \
+      -y \
+      -hide_banner \
+      -loglevel error \
+      -stats_period 2 \
+      -stats \
+      -framerate "$playback_fps" \
+      -i "$stage_dir/%06d.${frame_ext}" \
+      -vf 'pad=ceil(iw/2)*2:ceil(ih/2)*2' \
+      -c:v libx264 \
+      -pix_fmt yuv420p \
+      -movflags +faststart \
+      "$output_path"
+  else
+    ffmpeg \
+      -y \
+      -hide_banner \
+      -loglevel error \
+      -framerate "$playback_fps" \
+      -i "$stage_dir/%06d.${frame_ext}" \
+      -vf 'pad=ceil(iw/2)*2:ceil(ih/2)*2' \
+      -c:v libx264 \
+      -pix_fmt yuv420p \
+      -movflags +faststart \
+      "$output_path"
+  fi
+
+  local duration_seconds
+  duration_seconds="$(awk "BEGIN { printf \"%.2f\", $count / $playback_fps }")"
+
+  cleanup_preview_stage
+  trap - EXIT
+
+  log "Preview render complete"
+  printf 'preview written to %s\n' "$output_path"
+  printf 'frames=%s playback_fps=%s duration=%ss\n' "$count" "$playback_fps" "$duration_seconds"
+}
+
 main() {
   local command="${1:-}"
-  local subcommand="${2:-}"
+
+  if [[ $# -gt 0 ]]; then
+    shift
+  fi
 
   case "$command" in
+    status)
+      status_command "$@"
+      ;;
+    logs)
+      logs_command "$@"
+      ;;
+    preview)
+      preview_command "$@"
+      ;;
     caffeinate)
+      local subcommand="${1:-}"
       case "$subcommand" in
         start)
           caffeinate_start

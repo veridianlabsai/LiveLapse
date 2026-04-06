@@ -72,6 +72,28 @@ load_env() {
   : "${LIVELAPSE_RETRY_DELAY:=10}"
 }
 
+frame_file_extension() {
+  case "${LIVELAPSE_FORMAT:-webp}" in
+    webp)
+      printf 'webp\n'
+      ;;
+    png)
+      printf 'png\n'
+      ;;
+    jpg|jpeg)
+      printf 'jpg\n'
+      ;;
+    *)
+      log "Unsupported LIVELAPSE_FORMAT: ${LIVELAPSE_FORMAT:-}"
+      return 1
+      ;;
+  esac
+}
+
+resolved_data_dir() {
+  realpath_portable "$LIVELAPSE_DATA_DIR"
+}
+
 list_feed_records() {
   awk -F'|' '
     /^[[:space:]]*#/ { next }

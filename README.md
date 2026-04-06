@@ -9,8 +9,8 @@ Built to capture NASA's Artemis II lunar flyby across multiple feeds simultaneou
 Current implementation note:
 
 - Local capture works today via `bin/capture.sh`
-- `bin/livelapse` currently implements `caffeinate start|stop|status` on macOS
-- The broader CLI surface described below is still being backfilled
+- `bin/livelapse` currently implements `status`, `logs <feed>`, and `preview <feed>` plus `caffeinate start|stop|status` on macOS
+- Feed lifecycle commands such as `start|stop` are still being backfilled after the current local soak
 - For the current macOS workflow, see [docs/macos-runbook.md](docs/macos-runbook.md)
 - For the next implementation steps, see [next_steps.md](next_steps.md)
 
@@ -23,8 +23,8 @@ Current implementation note:
 - ISO 8601 timestamped filenames — no sequential counters, no collision on restart
 - Systemd-managed per-feed capture processes with automatic restart on stream drop
 - Health monitoring via cron — per-feed stale alerts and disk usage warnings via email (Resend)
-- Simple CLI for start/stop/status/logs/add/remove/stitch
-- Frame-to-timelapse stitching with time-range filtering
+- Local CLI for caffeinate, feed status, logs, and point-in-time preview videos
+- Stitching and broader feed lifecycle commands are planned next
 - Works on macOS (local testing) and Ubuntu 24+ (production)
 - No database — the filesystem is the database
 
@@ -101,30 +101,38 @@ HEALTHCHECK_DISK_THRESHOLD=80  # Disk usage % threshold
 
 ## CLI Reference (Planned Surface)
 
-Today, the only implemented CLI commands are:
+Today, the implemented CLI commands are:
 
 ```bash
+./bin/livelapse status
+./bin/livelapse logs artemis2-main
+./bin/livelapse preview artemis2-main
 ./bin/livelapse caffeinate start
 ./bin/livelapse caffeinate stop
 ./bin/livelapse caffeinate status
 ```
 
-The command surface below is the intended interface that still needs to be backed into the CLI:
+Planned next for the CLI:
 
 ```
 livelapse start [feed-name]     Start all feeds, or a specific feed
 livelapse stop [feed-name]      Stop all feeds, or a specific feed
-livelapse status                Table of all feeds: status, last frame, count, disk usage
 livelapse caffeinate start      Prevent idle sleep on macOS during local capture
 livelapse caffeinate stop       Release the macOS caffeinate hold
 livelapse caffeinate status     Show whether the macOS caffeinate hold is active
 livelapse logs <feed-name>      Tail logs for a feed (journalctl wrapper)
+livelapse preview <feed-name>   Render a point-in-time MP4 from current frames
 livelapse add <name> <url> [fps]  Add a new feed and start capture immediately
 livelapse remove <name>         Stop and remove a feed (frames kept by default)
 livelapse stitch <name> [opts]  Assemble captured frames into a timelapse video
 livelapse peek <feed-name>      Output the most recent frame to stdout
 livelapse disk                  Disk usage summary per feed and total
 ```
+
+Planned behavior notes:
+
+- When `start` or `stop` are run without a feed name in an interactive terminal, the CLI should offer a feed selector instead of forcing the user to retype names
+- Stopping a feed and starting it again should resume future capture in the same directory; gaps during the stopped interval are expected and no backfill is attempted
 
 ### Stitching
 
@@ -199,7 +207,7 @@ Health checks run every 60 seconds via cron, checking frame age per feed and ove
 |---|---|---|
 | Install deps | `brew install yt-dlp ffmpeg jq` | `apt install yt-dlp ffmpeg jq curl bc` |
 | Process management | Background process + PID file | systemd template units |
-| Logs | `$LIVELAPSE_DATA_DIR/<feed>/capture.log` | `journalctl -u livelapse@<feed>` |
+| Logs | `.pids/<feed>.log` | `journalctl -u livelapse@<feed>` |
 | Health check | User crontab | `/etc/cron.d/livelapse` |
 
 Run on macOS for local testing with a local data directory, deploy to Linux for production capture.

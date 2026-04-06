@@ -34,9 +34,17 @@
   - ffmpeg needed the `image2` muxer for timestamp expansion instead of writing the filename pattern literally
   - filenames now force UTC so the `Z` suffix is correct on macOS too
 - Added a minimal CLI entrypoint at [bin/livelapse](/Users/liam/Documents/dev/veridian-labs/livelapse/bin/livelapse) for `caffeinate start|stop|status` on macOS, backed by `launchctl`
+- Expanded [bin/livelapse](/Users/liam/Documents/dev/veridian-labs/livelapse/bin/livelapse) with non-disruptive local commands for the active soak:
+  - `status` to report configured feeds, running state, latest frame timestamp, and frame count
+  - `logs <feed-name>` to tail local macOS capture logs while keeping a Linux `journalctl` path open for later
+  - `preview <feed-name>` to build point-in-time MP4 previews from current frames without stopping capture
 - Added follow-on planning and local ops docs:
   - [next_steps.md](/Users/liam/Documents/dev/veridian-labs/livelapse/next_steps.md) for the CLI backfill and deployment sequence
   - [docs/macos-runbook.md](/Users/liam/Documents/dev/veridian-labs/livelapse/docs/macos-runbook.md) for the current manual macOS capture workflow and preview-video commands
+- Updated the local-first docs to reflect the overnight-soak strategy:
+  - [README.md](/Users/liam/Documents/dev/veridian-labs/livelapse/README.md) now lists the currently implemented inspection/preview commands and keeps `start|stop` as post-soak work
+  - [docs/macos-runbook.md](/Users/liam/Documents/dev/veridian-labs/livelapse/docs/macos-runbook.md) now uses the CLI for `status`, `logs`, and `preview` while leaving manual feed start/stop in place
+  - [next_steps.md](/Users/liam/Documents/dev/veridian-labs/livelapse/next_steps.md) now sequences non-disruptive local CLI hardening before lifecycle control, Ubuntu validation, and `doctl`
 - Expanded the local soak run to three active feeds from [feeds.conf](/Users/liam/Documents/dev/veridian-labs/livelapse/feeds.conf):
   - `artemis2-main`
   - `artemis2-2nd`
@@ -60,7 +68,8 @@
 - `bin/capture.sh artemis2-main` creates UTC timestamped frames locally under the configured data directory
 - `install/install.sh` handles macOS dependency/setup and Linux systemd deployment foundations
 - `bin/livelapse caffeinate start|stop|status` controls the macOS sleep-prevention hold for local captures
-- The repository is ready for an instance-focused Phase 0 continuation next
+- `bin/livelapse status`, `logs <feed-name>`, and `preview <feed-name>` operate safely against the live local soak without needing to restart feeds
+- The repository is ready for continued local-first hardening, with instance work still deferred until the post-soak lifecycle CLI lands
 
 ## Issues
 
@@ -70,8 +79,12 @@
 
 - Check the overnight macOS run first:
   - confirm the three capture processes are still running
+  - run `./bin/livelapse status` and compare it to the `.pids/` state
+  - spot-check `./bin/livelapse logs artemis2-main --no-follow`
+  - spot-check `./bin/livelapse preview artemis2-main`
   - inspect the newest frames under [data/artemis2-main](/Users/liam/Documents/dev/veridian-labs/livelapse/data/artemis2-main), [data/artemis2-2nd](/Users/liam/Documents/dev/veridian-labs/livelapse/data/artemis2-2nd), and [data/artemis2-3rd](/Users/liam/Documents/dev/veridian-labs/livelapse/data/artemis2-3rd)
   - review the preview MP4s under [data/output/intermediate](/Users/liam/Documents/dev/veridian-labs/livelapse/data/output/intermediate)
+- After the soak is assessed, add `start|stop` with safe process-group shutdown plus the planned interactive feed selector.
 - Then begin the Ubuntu/droplet session, mount storage, copy the repo to `/opt/livelapse`, run `install.sh`, and validate the `livelapse@artemis2-main` service.
 - On the instance, verify:
   - `systemctl status livelapse@artemis2-main`
