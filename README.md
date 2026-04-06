@@ -98,6 +98,9 @@ HEALTHCHECK_DISK_THRESHOLD=80  # Disk usage % threshold
 livelapse start [feed-name]     Start all feeds, or a specific feed
 livelapse stop [feed-name]      Stop all feeds, or a specific feed
 livelapse status                Table of all feeds: status, last frame, count, disk usage
+livelapse caffeinate start      Prevent idle sleep on macOS during local capture
+livelapse caffeinate stop       Release the macOS caffeinate hold
+livelapse caffeinate status     Show whether the macOS caffeinate hold is active
 livelapse logs <feed-name>      Tail logs for a feed (journalctl wrapper)
 livelapse add <name> <url> [fps]  Add a new feed and start capture immediately
 livelapse remove <name>         Stop and remove a feed (frames kept by default)
@@ -182,6 +185,8 @@ Health checks run every 60 seconds via cron, checking frame age per feed and ove
 | Health check | User crontab | `/etc/cron.d/livelapse` |
 
 Run on macOS for local testing with a local data directory, deploy to Linux for production capture.
+
+On macOS, keep the machine awake during long local captures with `bin/livelapse caffeinate start`.
 
 ---
 

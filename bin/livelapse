@@ -1,0 +1,181 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+SCRIPT_DIR="$(
+  CDPATH='' cd -- "$(dirname -- "${BASH_SOURCE[0]}")" >/dev/null 2>&1
+  pwd
+)"
+
+# shellcheck source=bin/common.sh
+source "$SCRIPT_DIR/common.sh"
+
+usage() {
+  cat <<'EOF' >&2
+Usage:
+  bin/livelapse caffeinate start
+  bin/livelapse caffeinate stop
+  bin/livelapse caffeinate status
+EOF
+}
+
+CAFFEINATE_LABEL="com.veridian.livelapse.caffeinate"
+
+ensure_darwin() {
+  if ! is_darwin; then
+    log "caffeinate is only available on macOS"
+    exit 1
+  fi
+}
+
+caffeinate_target() {
+  printf 'gui/%s/%s\n' "$(id -u)" "$CAFFEINATE_LABEL"
+}
+
+caffeinate_stdout_file() {
+  printf '/tmp/livelapse_caffeinate_%s.out\n' "$(id -u)"
+}
+
+caffeinate_stderr_file() {
+  printf '/tmp/livelapse_caffeinate_%s.err\n' "$(id -u)"
+}
+
+caffeinate_print() {
+  launchctl print "$(caffeinate_target)" 2>/dev/null
+}
+
+caffeinate_pid() {
+  local pid=""
+
+  pid="$(
+    caffeinate_print | awk -F'= ' '
+    /^[[:space:]]*pid = / {
+      print $2
+      exit
+    }
+  '
+  )"
+
+  [[ -n "$pid" ]] || return 1
+  printf '%s\n' "$pid"
+}
+
+wait_for_launchctl_state() {
+  local desired="$1"
+  local attempts=0
+
+  while true; do
+    if [[ "$desired" == "present" ]] && caffeinate_print >/dev/null; then
+      return 0
+    fi
+
+    if [[ "$desired" == "absent" ]] && ! caffeinate_print >/dev/null; then
+      return 0
+    fi
+
+    if (( attempts >= 50 )); then
+      return 1
+    fi
+
+    sleep 0.1
+    attempts=$((attempts + 1))
+  done
+}
+
+caffeinate_start() {
+  ensure_darwin
+  ensure_command caffeinate
+  ensure_command launchctl
+  ensure_pids_dir
+
+  local stdout_file stderr_file pid=""
+  stdout_file="$(caffeinate_stdout_file)"
+  stderr_file="$(caffeinate_stderr_file)"
+  rm -f "$(caffeinate_pid_file)"
+
+  if pid="$(caffeinate_pid)"; then
+    printf 'caffeinate running (pid %s)\n' "$pid"
+    return 0
+  fi
+
+  launchctl remove "$CAFFEINATE_LABEL" >/dev/null 2>&1 || true
+  launchctl submit -l "$CAFFEINATE_LABEL" -o "$stdout_file" -e "$stderr_file" -- /usr/bin/caffeinate -dis
+
+  if ! wait_for_launchctl_state present; then
+    log "Failed to start caffeinate; see $stdout_file and $stderr_file"
+    return 1
+  fi
+
+  pid="$(caffeinate_pid)"
+  printf 'caffeinate started (pid %s)\n' "$pid"
+}
+
+caffeinate_stop() {
+  ensure_darwin
+  ensure_command launchctl
+  ensure_pids_dir
+
+  local pid=""
+  rm -f "$(caffeinate_pid_file)"
+
+  if ! pid="$(caffeinate_pid)"; then
+    if caffeinate_print >/dev/null; then
+      launchctl remove "$CAFFEINATE_LABEL" >/dev/null 2>&1 || true
+    fi
+    printf 'caffeinate stopped\n'
+    return 0
+  fi
+
+  launchctl remove "$CAFFEINATE_LABEL"
+
+  if ! wait_for_launchctl_state absent; then
+    log "caffeinate did not stop cleanly (pid $pid)"
+    return 1
+  fi
+
+  printf 'caffeinate stopped\n'
+}
+
+caffeinate_status() {
+  ensure_darwin
+  ensure_command launchctl
+  ensure_pids_dir
+
+  if pid="$(caffeinate_pid)"; then
+    printf 'caffeinate running (pid %s)\n' "$pid"
+    return 0
+  fi
+
+  printf 'caffeinate stopped\n'
+}
+
+main() {
+  local command="${1:-}"
+  local subcommand="${2:-}"
+
+  case "$command" in
+    caffeinate)
+      case "$subcommand" in
+        start)
+          caffeinate_start
+          ;;
+        stop)
+          caffeinate_stop
+          ;;
+        status)
+          caffeinate_status
+          ;;
+        *)
+          usage
+          exit 1
+          ;;
+      esac
+      ;;
+    *)
+      usage
+      exit 1
+      ;;
+  esac
+}
+
+main "$@"
