@@ -34,6 +34,9 @@
   - ffmpeg needed the `image2` muxer for timestamp expansion instead of writing the filename pattern literally
   - filenames now force UTC so the `Z` suffix is correct on macOS too
 - Added a minimal CLI entrypoint at [bin/livelapse](/Users/liam/Documents/dev/veridian-labs/livelapse/bin/livelapse) for `caffeinate start|stop|status` on macOS, backed by `launchctl`
+- Added follow-on planning and local ops docs:
+  - [next_steps.md](/Users/liam/Documents/dev/veridian-labs/livelapse/next_steps.md) for the CLI backfill and deployment sequence
+  - [docs/macos-runbook.md](/Users/liam/Documents/dev/veridian-labs/livelapse/docs/macos-runbook.md) for the current manual macOS capture workflow and preview-video commands
 - Expanded the local soak run to three active feeds from [feeds.conf](/Users/liam/Documents/dev/veridian-labs/livelapse/feeds.conf):
   - `artemis2-main`
   - `artemis2-2nd`

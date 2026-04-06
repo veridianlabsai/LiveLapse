@@ -6,6 +6,14 @@ Self-hosted timelapse capture from live streams. Pull timestamped frames from Yo
 
 Built to capture NASA's Artemis II lunar flyby across multiple feeds simultaneously.
 
+Current implementation note:
+
+- Local capture works today via `bin/capture.sh`
+- `bin/livelapse` currently implements `caffeinate start|stop|status` on macOS
+- The broader CLI surface described below is still being backfilled
+- For the current macOS workflow, see [docs/macos-runbook.md](docs/macos-runbook.md)
+- For the next implementation steps, see [next_steps.md](next_steps.md)
+
 ---
 
 ## Features
@@ -32,18 +40,17 @@ git clone https://github.com/veridian-labs/livelapse /opt/livelapse
 cd /opt/livelapse
 
 # 2. Configure feeds
-cp feeds.conf.example feeds.conf
 # Edit feeds.conf — add your streams (name|url|fps)
 
 # 3. Configure environment
 cp .env.example .env
 # Edit .env — set LIVELAPSE_DATA_DIR and optional alerting keys
 
-# 4. Install dependencies and start
+# 4. Install dependencies
 ./install/install.sh
 
-# 5. Verify capture is running
-livelapse status
+# 5. On macOS, use the current runbook to start capture
+# docs/macos-runbook.md
 ```
 
 Frames will appear in `$LIVELAPSE_DATA_DIR/<feed-name>/` within seconds.
@@ -92,7 +99,17 @@ HEALTHCHECK_DISK_THRESHOLD=80  # Disk usage % threshold
 
 ---
 
-## CLI Reference
+## CLI Reference (Planned Surface)
+
+Today, the only implemented CLI commands are:
+
+```bash
+./bin/livelapse caffeinate start
+./bin/livelapse caffeinate stop
+./bin/livelapse caffeinate status
+```
+
+The command surface below is the intended interface that still needs to be backed into the CLI:
 
 ```
 livelapse start [feed-name]     Start all feeds, or a specific feed
@@ -135,15 +152,16 @@ Options:
 livelapse/
 ├── feeds.conf                  # Feed definitions
 ├── .env.example                # Config template
+├── next_steps.md               # Short implementation plan
 ├── bin/
 │   ├── livelapse               # CLI entrypoint
 │   ├── capture.sh              # Per-feed capture loop (spawned by systemd)
-│   ├── healthcheck.sh          # Cron-driven health monitor
-│   └── stitch.sh               # Frame-to-video assembler
+│   └── common.sh               # Shared shell helpers
+├── docs/
+│   ├── livelapse-spec.md       # Original spec
+│   └── macos-runbook.md        # Current local operation commands
 ├── install/
-│   ├── install.sh              # Install deps, systemd units, cron
-│   ├── do-provision.sh         # DigitalOcean droplet + volume lifecycle (optional)
-│   └── uninstall.sh            # Clean removal
+│   └── install.sh              # Install deps and Linux systemd units
 └── templates/
     └── livelapse@.service      # Systemd template unit
 ```
@@ -204,19 +222,15 @@ For a 3-feed, 3-day capture: 250 GB volume, 2 vCPU / 2 GB RAM droplet.
 
 ---
 
-## DigitalOcean Provisioning (Optional)
+## DigitalOcean Provisioning (Planned)
 
-`install/do-provision.sh` manages the full infrastructure lifecycle from your local machine using `doctl`:
+`doctl`-based provisioning is still planned work.
 
-```bash
-do-provision.sh inspect  --droplet-name my-droplet   # Read-only recon
-do-provision.sh attach   --droplet-name my-droplet   # Create + attach block volume
-do-provision.sh detach   --droplet-name my-droplet   # Unmount + detach (data preserved)
-do-provision.sh destroy  --volume-name livelapse-data # Permanent deletion (requires confirmation)
-do-provision.sh status   --droplet-name my-droplet   # Current state summary
-```
+The intended order is:
 
-All destructive actions require explicit confirmation. The script inspects existing state before making any changes and never touches resources outside its scope.
+1. finish the local CLI backfill
+2. validate one manual Ubuntu deployment end-to-end
+3. then add `install/do-provision.sh` once the infrastructure shape is proven
 
 ---
 
