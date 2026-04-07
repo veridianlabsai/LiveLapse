@@ -37,6 +37,7 @@
 - Expanded [bin/livelapse](/Users/liam/Documents/dev/veridian-labs/livelapse/bin/livelapse) with non-disruptive local commands for the active soak:
   - `status` to report configured feeds, running state, latest frame timestamp, and frame count
   - `logs <feed-name>` to tail local macOS capture logs while keeping a Linux `journalctl` path open for later
+  - `peek <feed-name>` to stream the newest captured frame to stdout for quick inspection or redirection
   - `preview <feed-name>` to build point-in-time MP4 previews from current frames without stopping capture
   - `preview --add-timestamp [--timestamp-tz <zone>]` to burn per-frame capture timestamps derived from the filenames into preview videos
 - Added guarded lifecycle commands in [bin/livelapse](/Users/liam/Documents/dev/veridian-labs/livelapse/bin/livelapse):
@@ -65,6 +66,14 @@
   - [artemis2-2nd_2026-04-06T02_15_12Z.mp4](/Users/liam/Documents/dev/veridian-labs/livelapse/data/output/intermediate/artemis2-2nd_2026-04-06T02_15_12Z.mp4) from 549 frames, duration `18.30s`
   - [artemis2-3rd_2026-04-06T02_15_12Z.mp4](/Users/liam/Documents/dev/veridian-labs/livelapse/data/output/intermediate/artemis2-3rd_2026-04-06T02_15_12Z.mp4) from 490 frames, duration `16.33s`
 
+- Added `peek <feed-name>` to [bin/livelapse](/Users/liam/Documents/dev/veridian-labs/livelapse/bin/livelapse) — streams the newest valid frame's raw bytes to stdout for piping or redirection
+- Fixed `latest_frame_path()` to skip runt frames (< 1 KB) left by stream drops — affects `peek`, `status`, and `preview`
+- Added `watch <feed-name>` to [bin/livelapse](/Users/liam/Documents/dev/veridian-labs/livelapse/bin/livelapse) — live inline image display with auto-refresh
+  - Auto-detects iTerm2/Kitty (native inline images), falls back to `chafa` or `viu`
+  - `--interval <seconds>` controls refresh rate (default 1s); `--once` shows a single frame and exits
+  - Read-only: never touches capture processes, PIDs, or logs
+  - Shows the last valid frame for stopped feeds
+
 ## In Progress
 
 - Overnight macOS soak is still running with three feeds
@@ -76,7 +85,7 @@
 - `bin/capture.sh artemis2-main` creates UTC timestamped frames locally under the configured data directory
 - `install/install.sh` handles macOS dependency/setup and Linux systemd deployment foundations
 - `bin/livelapse caffeinate start|stop|status` controls the macOS sleep-prevention hold for local captures
-- `bin/livelapse status`, `logs <feed-name>`, and `preview <feed-name>` operate safely against the live local soak without needing to restart feeds
+- `bin/livelapse status`, `logs <feed-name>`, `peek <feed-name>`, and `preview <feed-name>` operate safely against the live local soak without needing to restart feeds
 - `bin/livelapse start|stop` provide guarded lifecycle control with dry-run support and operation-aware feed selection
 - `bin/livelapse preview --add-timestamp` burns daylight-saving-aware local timestamps from the frame filenames into the rendered preview video
 - The repository is ready for post-soak lifecycle validation, with instance work still deferred until local confidence is established

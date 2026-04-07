@@ -6,7 +6,7 @@ This document describes the current Phase 0 macOS workflow.
 
 - `./install.sh` installs local dependencies and creates a local `.env` if needed
 - `./bin/capture.sh <feed-name>` remains the per-feed capture loop used under the CLI
-- `./bin/livelapse status`, `start`, `stop`, `logs <feed-name>`, and `preview <feed-name>` are available locally
+- `./bin/livelapse status`, `start`, `stop`, `logs <feed-name>`, `peek <feed-name>`, and `preview <feed-name>` are available locally
 - `./bin/livelapse caffeinate start|stop|status` manages the macOS no-sleep hold
 - Restarting a stopped feed resumes future capture only; gaps while stopped are expected
 - During a live soak, use `--dry-run` first before touching active feeds
@@ -113,6 +113,29 @@ Captured frames land under the data directory configured for the repo. In the cu
 ```bash
 ls data/artemis2-main | tail
 ```
+
+## Inspect The Latest Frame
+
+This streams the newest frame to stdout, so use a pipe or redirect:
+
+```bash
+./bin/livelapse peek artemis2-main > /tmp/artemis2-main-latest.webp
+./bin/livelapse peek artemis2-main | imgcat
+```
+
+## Watch A Feed Live
+
+Display the latest captured frame inline in the terminal, refreshing automatically. This is the fastest way to see what a feed is capturing right now without leaving the terminal.
+
+```bash
+./bin/livelapse watch artemis2-main                # refresh every 1s, Ctrl-C to stop
+./bin/livelapse watch artemis2-main --interval 5   # refresh every 5s
+./bin/livelapse watch artemis2-main --once          # show one frame and exit
+```
+
+Works natively in iTerm2 and Kitty. For other terminals, install `chafa` (`brew install chafa`) or `viu` (`brew install viu`).
+
+For stopped feeds, `watch` shows the last valid frame before the stream dropped — runt frames from stream drops are skipped automatically.
 
 ## Create A Preview Video For One Feed
 

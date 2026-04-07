@@ -5,7 +5,7 @@ This file tracks the immediate follow-on work after the Phase 0 local macOS soak
 ## Current Position
 
 - `bin/capture.sh` works for local frame capture
-- `bin/livelapse` now supports `status`, `start`, `stop`, `logs <feed-name>`, and `preview <feed-name>` plus `caffeinate start|stop|status` on macOS
+- `bin/livelapse` now supports `status`, `start`, `stop`, `logs <feed-name>`, `peek <feed-name>`, and `preview <feed-name>` plus `caffeinate start|stop|status` on macOS
 - macOS local capture can now be managed through the CLI with interactive selectors, confirmations, and `--dry-run` guardrails
 - Linux deployment has install and systemd scaffolding, but has not been validated end-to-end on Ubuntu yet
 - DigitalOcean block storage automation is still planned work, not current implementation
@@ -24,12 +24,14 @@ Implement and verify these commands in `bin/livelapse` first:
 
 - `status`
 - `logs <feed-name>`
+- `peek <feed-name>`
 - `preview <feed-name>`
 
 Expected behavior:
 
 - `status` reports whether each configured feed is running and shows the latest frame timestamp if available
 - `logs` tails the local log file on macOS and maps cleanly to `journalctl` on Linux later
+- `peek` copies the newest frame to stdout for quick inspection or handoff
 - `preview` snapshots the current frame list without stopping capture and writes an MP4 under `$LIVELAPSE_DATA_DIR/output/intermediate/`
 - None of these commands should disturb already-running capture jobs during the overnight soak
 

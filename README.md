@@ -196,6 +196,11 @@ Health checks run every 60 seconds via cron, checking frame age per feed and dis
 ./bin/livelapse logs <feed-name>                        # Tail feed log (auto-follow in a TTY)
 ./bin/livelapse logs <feed-name> --follow               # Always follow
 ./bin/livelapse logs <feed-name> --lines 100            # Set line count
+./bin/livelapse peek <feed-name> > ./out/latest.webp    # Write the latest captured frame
+./bin/livelapse peek <feed-name> | imgcat               # Stream the latest frame into a viewer
+./bin/livelapse watch <feed-name>                       # Live view: show latest frame, refresh every 1s
+./bin/livelapse watch <feed-name> --interval 5          # Refresh every 5 seconds
+./bin/livelapse watch <feed-name> --once                # Show one frame and exit
 ./bin/livelapse preview <feed-name>                     # Render a point-in-time MP4
 ./bin/livelapse preview <feed-name> --playback-fps 24
 ./bin/livelapse preview <feed-name> --output ./out/preview.mp4
@@ -220,13 +225,25 @@ Lifecycle notes:
 - `start <feed-name>` checks whether that feed is already running and offers a stop-and-restart path instead of silently duplicating it
 - During an active soak, prefer `--dry-run` first to confirm the target set before touching live captures
 
+Peek notes:
+
+- `peek` writes the newest captured frame's raw bytes to stdout, so pipe or redirect it instead of running it bare in an interactive terminal
+- This is useful for quick inspection with tools such as `imgcat` or for copying out the latest frame without hunting through the feed directory
+
+Watch notes:
+
+- `watch` displays the latest captured frame inline in the terminal and refreshes automatically — a live monitor for what the feed is capturing right now
+- For stopped feeds it shows the last valid frame before the stream dropped
+- Renderer detection is automatic: iTerm2 and Kitty use native inline images; falls back to `chafa` or `viu` if installed
+- `--interval <seconds>` controls the refresh rate (default 1s); `--once` shows a single frame and exits
+- Read-only — never touches capture processes, PIDs, or log files
+
 ### Planned next
 
 ```
 livelapse add <name> <url> [fps]  Add a new feed and start capture immediately
 livelapse remove <name>           Stop and remove a feed (frames kept by default)
 livelapse stitch <name> [opts]    Assemble captured frames into a timelapse video
-livelapse peek <feed-name>        Output the most recent frame to stdout
 livelapse disk                    Disk usage summary per feed and total
 ```
 
