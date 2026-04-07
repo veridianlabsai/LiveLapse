@@ -20,6 +20,8 @@ Usage:
   bin/livelapse peek <feed-name>
   bin/livelapse watch <feed-name> [--interval <seconds>] [--once]
   bin/livelapse preview <feed-name> [--playback-fps <fps>] [--output <path>] [--add-timestamp] [--timestamp-tz <zone>]
+  bin/livelapse extract [feed-name] --manifest <file> [--date <YYYY-MM-DD>] [--pad <n>] [--playback-fps <fps>] [--output <dir>] [--compile]
+  bin/livelapse extract <feed-name> --at <time> --date <YYYY-MM-DD> [--pad <n>] [--label <text>] [--fragment <n>]
   bin/livelapse caffeinate start
   bin/livelapse caffeinate stop
   bin/livelapse caffeinate status
@@ -1429,6 +1431,470 @@ preview_command() {
   printf 'frames=%s playback_fps=%s duration=%ss\n' "$count" "$playback_fps" "$duration_seconds"
 }
 
+# ---------------------------------------------------------------------------
+# extract — pull timestamped fragments from captured frames
+# ---------------------------------------------------------------------------
+
+EXTRACT_STAGE_DIR=""
+
+cleanup_extract_stage() {
+  if [[ -n "${EXTRACT_STAGE_DIR:-}" ]]; then
+    rm -rf "$EXTRACT_STAGE_DIR"
+    EXTRACT_STAGE_DIR=""
+  fi
+}
+
+render_extract_fragment() {
+  local frag_manifest="$1"
+  local output_path="$2"
+  local playback_fps="$3"
+  local frame_ext="$4"
+  local frag_stage_dir="$5"
+
+  local count=0
+  while IFS= read -r frame_path; do
+    [[ -n "$frame_path" ]] || continue
+    count=$((count + 1))
+    local target_path
+    printf -v target_path '%s/%06d.%s' "$frag_stage_dir" "$count" "$frame_ext"
+    ln -s "$frame_path" "$target_path"
+  done < "$frag_manifest"
+
+  if (( count == 0 )); then
+    return 1
+  fi
+
+  ffmpeg \
+    -y \
+    -hide_banner \
+    -loglevel error \
+    -framerate "$playback_fps" \
+    -i "$frag_stage_dir/%06d.${frame_ext}" \
+    -vf 'pad=ceil(iw/2)*2:ceil(ih/2)*2' \
+    -c:v libx264 \
+    -pix_fmt yuv420p \
+    -movflags +faststart \
+    "$output_path"
+
+  printf '%s\n' "$count"
+}
+
+extract_command() {
+  local feed_name=""
+  local extract_date=""
+  local manifest_file=""
+  local at_time=""
+  local from_time=""
+  local to_time=""
+  local pad_left="0"
+  local pad_right="0"
+  local label=""
+  local fragment_start="1"
+  local playback_fps="$DEFAULT_PREVIEW_FPS"
+  local output_dir=""
+  local compile="no"
+
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --date)
+        shift
+        if [[ $# -eq 0 ]]; then log "Missing value for --date"; return 1; fi
+        extract_date="$1"
+        ;;
+      --manifest)
+        shift
+        if [[ $# -eq 0 ]]; then log "Missing value for --manifest"; return 1; fi
+        manifest_file="$1"
+        ;;
+      --at)
+        shift
+        if [[ $# -eq 0 ]]; then log "Missing value for --at"; return 1; fi
+        at_time="$1"
+        ;;
+      --from)
+        shift
+        if [[ $# -eq 0 ]]; then log "Missing value for --from"; return 1; fi
+        from_time="$1"
+        ;;
+      --to)
+        shift
+        if [[ $# -eq 0 ]]; then log "Missing value for --to"; return 1; fi
+        to_time="$1"
+        ;;
+      --pad)
+        shift
+        if [[ $# -eq 0 ]]; then log "Missing value for --pad"; return 1; fi
+        pad_left="$1"
+        pad_right="$1"
+        ;;
+      --pad-left)
+        shift
+        if [[ $# -eq 0 ]]; then log "Missing value for --pad-left"; return 1; fi
+        pad_left="$1"
+        ;;
+      --pad-right)
+        shift
+        if [[ $# -eq 0 ]]; then log "Missing value for --pad-right"; return 1; fi
+        pad_right="$1"
+        ;;
+      --label)
+        shift
+        if [[ $# -eq 0 ]]; then log "Missing value for --label"; return 1; fi
+        label="$1"
+        ;;
+      --fragment)
+        shift
+        if [[ $# -eq 0 ]]; then log "Missing value for --fragment"; return 1; fi
+        fragment_start="$1"
+        ;;
+      --playback-fps)
+        shift
+        if [[ $# -eq 0 ]]; then log "Missing value for --playback-fps"; return 1; fi
+        playback_fps="$1"
+        ;;
+      --output)
+        shift
+        if [[ $# -eq 0 ]]; then log "Missing value for --output"; return 1; fi
+        output_dir="$1"
+        ;;
+      --compile)
+        compile="yes"
+        ;;
+      -*)
+        log "Unknown extract option: $1"
+        return 1
+        ;;
+      *)
+        if [[ -n "$feed_name" ]]; then
+          log "Only one feed name may be provided"
+          return 1
+        fi
+        feed_name="$1"
+        ;;
+    esac
+    shift
+  done
+
+  if [[ -z "$manifest_file" && -z "$at_time" && -z "$from_time" ]]; then
+    log "Provide --manifest <file>, --at <time>, or --from <time>"
+    return 1
+  fi
+
+  if [[ -n "$manifest_file" && ( -n "$at_time" || -n "$from_time" ) ]]; then
+    log "--manifest cannot be combined with --at or --from"
+    return 1
+  fi
+
+  if [[ -n "$manifest_file" && ! -f "$manifest_file" ]]; then
+    log "Manifest file not found: $manifest_file"
+    return 1
+  fi
+
+  # Extract manifest headers: # feed: and # date:
+  if [[ -n "$manifest_file" ]]; then
+    local header_val=""
+    if [[ -z "$feed_name" ]]; then
+      header_val="$(grep -m1 '^[[:space:]]*#[[:space:]]*feed:' "$manifest_file" | sed 's/^[[:space:]]*#[[:space:]]*feed:[[:space:]]*//' | tr -d '[:space:]')" || true
+      if [[ -n "$header_val" ]]; then
+        feed_name="$header_val"
+      fi
+    fi
+    if [[ -z "$extract_date" ]]; then
+      header_val="$(grep -m1 '^[[:space:]]*#[[:space:]]*date:' "$manifest_file" | sed 's/^[[:space:]]*#[[:space:]]*date:[[:space:]]*//' | tr -d '[:space:]')" || true
+      if [[ -n "$header_val" ]]; then
+        extract_date="$header_val"
+      fi
+    fi
+  fi
+
+  if [[ -z "$feed_name" ]]; then
+    log "Feed name required: provide as argument or # feed: header in manifest"
+    return 1
+  fi
+
+  validate_positive_number "$playback_fps" "--playback-fps"
+
+  ensure_feeds_exist
+  ensure_feed_exists "$feed_name"
+  ensure_command ffmpeg
+  ensure_command python3
+  load_env
+
+  local data_dir frame_ext source_dir
+  data_dir="$(resolved_data_dir)"
+  frame_ext="$(frame_file_extension)"
+  source_dir="$(feed_data_dir "$feed_name" "$data_dir")"
+
+  if [[ ! -d "$source_dir" ]]; then
+    log "No frame directory found for $feed_name at $source_dir"
+    return 1
+  fi
+
+  if [[ -z "$output_dir" ]]; then
+    output_dir="$data_dir/output/extracts/$feed_name"
+  else
+    output_dir="$(realpath_portable "$output_dir")"
+  fi
+  mkdir -p "$output_dir"
+
+  local stage_dir
+  stage_dir="$(mktemp -d "${TMPDIR:-/tmp}/extract_${feed_name}.XXXXXX")"
+  EXTRACT_STAGE_DIR="$stage_dir"
+  trap cleanup_extract_stage EXIT
+
+  # Build manifest input for single-entry mode
+  local manifest_input="$manifest_file"
+  if [[ -z "$manifest_input" ]]; then
+    manifest_input="$stage_dir/single_manifest.txt"
+    local ts_spec=""
+    if [[ -n "$at_time" ]]; then
+      ts_spec="$at_time"
+    elif [[ -n "$from_time" ]]; then
+      ts_spec="$from_time"
+      if [[ -n "$to_time" ]]; then
+        ts_spec="${from_time}-${to_time}"
+      fi
+    fi
+    printf '%s | %s\n' "$ts_spec" "${label:-$ts_spec}" > "$manifest_input"
+  fi
+
+  # Build master frame list
+  local all_frames_file="$stage_dir/all_frames.txt"
+  find "$source_dir" -maxdepth 1 -type f -name "*.${frame_ext}" | LC_ALL=C sort > "$all_frames_file"
+
+  local total_frames
+  total_frames="$(wc -l < "$all_frames_file" | tr -d '[:space:]')"
+
+  if [[ -z "$total_frames" || "$total_frames" == "0" ]]; then
+    log "No .$frame_ext frames found for $feed_name in $source_dir"
+    return 1
+  fi
+
+  log "Extracting fragments from $feed_name"
+  log "Source: $source_dir ($total_frames frames)"
+  log "Output: $output_dir"
+
+  # Parse manifest and select frames per fragment
+  python3 - "$all_frames_file" "$stage_dir" "$extract_date" "$pad_left" "$pad_right" "$fragment_start" "$manifest_input" <<'PYEOF'
+from __future__ import annotations
+
+import bisect
+import re
+import sys
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+
+
+def slugify(text: str) -> str:
+    slug = re.sub(r'[^a-z0-9]+', '-', text.lower().strip())
+    return re.sub(r'-+', '-', slug).strip('-')[:60] or 'fragment'
+
+
+def parse_time(raw: str, date_prefix: str) -> datetime:
+    t = raw.strip()
+    # Full ISO: 2026-04-06T09:07:00Z or 2026-04-06T09_07_00Z
+    if 'T' in t and len(t) > 10:
+        t_norm = t.replace('_', ':').rstrip('Z')
+        for fmt in ('%Y-%m-%dT%H:%M:%S', '%Y-%m-%dT%H:%M'):
+            try:
+                return datetime.strptime(t_norm, fmt).replace(tzinfo=timezone.utc)
+            except ValueError:
+                continue
+    # HH:MM:SS
+    if re.match(r'^\d{1,2}:\d{2}:\d{2}$', t):
+        if not date_prefix:
+            print(f'--date required for short timestamp: {t}', file=sys.stderr)
+            sys.exit(1)
+        parts = t.split(':')
+        h = parts[0].zfill(2)
+        return datetime.strptime(
+            f'{date_prefix}T{h}:{parts[1]}:{parts[2]}', '%Y-%m-%dT%H:%M:%S'
+        ).replace(tzinfo=timezone.utc)
+    # HH:MM
+    if re.match(r'^\d{1,2}:\d{2}$', t):
+        if not date_prefix:
+            print(f'--date required for short timestamp: {t}', file=sys.stderr)
+            sys.exit(1)
+        parts = t.split(':')
+        h = parts[0].zfill(2)
+        return datetime.strptime(
+            f'{date_prefix}T{h}:{parts[1]}:00', '%Y-%m-%dT%H:%M:%S'
+        ).replace(tzinfo=timezone.utc)
+    print(f'Cannot parse timestamp: {t}', file=sys.stderr)
+    sys.exit(1)
+
+
+def has_seconds(raw: str) -> bool:
+    return len(raw.strip().split(':')) >= 3
+
+
+def parse_spec(spec: str, date_prefix: str) -> tuple[datetime, datetime]:
+    spec = spec.strip()
+    # Range: HH:MM-HH:MM or HH:MM:SS-HH:MM:SS
+    m = re.match(
+        r'^(\d{1,2}:\d{2}(?::\d{2})?)\s*-\s*(\d{1,2}:\d{2}(?::\d{2})?)$', spec
+    )
+    if m:
+        s = parse_time(m.group(1), date_prefix)
+        e = parse_time(m.group(2), date_prefix)
+        if e < s:
+            s, e = e, s
+        if not has_seconds(m.group(2)):
+            e += timedelta(seconds=59)
+        return s, e
+    # Multi-point: comma-separated
+    if ',' in spec:
+        raw_parts = [p.strip() for p in spec.split(',')]
+        windows = []
+        for raw in raw_parts:
+            t = parse_time(raw, date_prefix)
+            if has_seconds(raw):
+                windows.append((t, t))
+            else:
+                windows.append((t, t + timedelta(seconds=59)))
+        return min(w[0] for w in windows), max(w[1] for w in windows)
+    # Single timestamp
+    s = parse_time(spec, date_prefix)
+    if has_seconds(spec):
+        return s, s
+    return s, s + timedelta(seconds=59)
+
+
+# --- Main ---
+
+all_frames_file = Path(sys.argv[1])
+stage_dir = Path(sys.argv[2])
+date_prefix = sys.argv[3]
+default_pl = int(sys.argv[4])
+default_pr = int(sys.argv[5])
+frag_start = int(sys.argv[6])
+manifest_path = Path(sys.argv[7])
+
+# Load sorted frame list and parse timestamps from filenames
+frames: list[tuple[datetime, str]] = []
+for line in all_frames_file.read_text().splitlines():
+    line = line.strip()
+    if not line:
+        continue
+    stem = Path(line).stem
+    try:
+        dt = datetime.strptime(stem, '%Y-%m-%dT%H_%M_%SZ').replace(tzinfo=timezone.utc)
+        frames.append((dt, line))
+    except ValueError:
+        continue
+
+if not frames:
+    print('No parseable frames found', file=sys.stderr)
+    sys.exit(1)
+
+frame_dts = [f[0] for f in frames]
+
+# Parse manifest
+entries: list[tuple[datetime, datetime, str, int, int]] = []
+for line in manifest_path.read_text().splitlines():
+    line = line.strip()
+    if not line or line.startswith('#'):
+        continue
+    parts = [p.strip() for p in line.split('|')]
+    ts = parts[0]
+    label = parts[1] if len(parts) > 1 and parts[1] else ts
+    if len(parts) > 2 and parts[2]:
+        pl = int(parts[2])
+        pr = int(parts[3]) if len(parts) > 3 and parts[3] else pl
+    else:
+        pl = default_pl
+        pr = default_pr
+    start, end = parse_spec(ts, date_prefix)
+    entries.append((start, end, label, pl, pr))
+
+if not entries:
+    print('No entries found in manifest', file=sys.stderr)
+    sys.exit(1)
+
+# Select frames per entry
+meta: list[str] = []
+for i, (start, end, label, pl, pr) in enumerate(entries):
+    frag_num = frag_start + i
+    si = bisect.bisect_left(frame_dts, start)
+    ei = bisect.bisect_right(frame_dts, end)
+    core_count = ei - si
+    if core_count == 0:
+        print(
+            f'Warning: no frames for fragment {frag_num:03d} ({label}): '
+            f'{start.isoformat()} to {end.isoformat()}',
+            file=sys.stderr,
+        )
+        continue
+    ps = max(0, si - pl)
+    pe = min(len(frames), ei + pr)
+    selected = [frames[j][1] for j in range(ps, pe)]
+    frag_file = stage_dir / f'frag_{frag_num:03d}.txt'
+    frag_file.write_text('\n'.join(selected) + '\n')
+    meta.append(f'{frag_num:03d}|{slugify(label)}|{len(selected)}|{label}')
+
+summary = stage_dir / 'fragments.txt'
+summary.write_text('\n'.join(meta) + '\n')
+print(f'Prepared {len(meta)} fragment(s) from {len(entries)} entries', file=sys.stderr)
+PYEOF
+
+  # Read fragments summary and render each
+  local fragments_file="$stage_dir/fragments.txt"
+  if [[ ! -f "$fragments_file" ]] || [[ ! -s "$fragments_file" ]]; then
+    log "No fragments were produced"
+    return 1
+  fi
+
+  local frag_count=0
+  local concat_list="$stage_dir/concat.txt"
+
+  while IFS='|' read -r frag_num frag_slug frag_frames frag_label; do
+    [[ -n "$frag_num" ]] || continue
+    frag_count=$((frag_count + 1))
+
+    local frag_manifest="$stage_dir/frag_${frag_num}.txt"
+    local frag_stage="$stage_dir/stage_${frag_num}"
+    local output_file="$output_dir/${frag_num}_${frag_slug}.mp4"
+
+    mkdir -p "$frag_stage"
+
+    log "Rendering fragment $frag_num: $frag_label ($frag_frames frames)"
+
+    local rendered_frames
+    rendered_frames="$(render_extract_fragment "$frag_manifest" "$output_file" "$playback_fps" "$frame_ext" "$frag_stage")"
+
+    local duration
+    duration="$(awk "BEGIN { printf \"%.2f\", $rendered_frames / $playback_fps }")"
+    printf 'fragment %s written to %s (%s frames, %ss)\n' "$frag_num" "$output_file" "$rendered_frames" "$duration"
+
+    if [[ "$compile" == "yes" ]]; then
+      printf "file '%s'\n" "$output_file" >> "$concat_list"
+    fi
+  done < "$fragments_file"
+
+  if [[ "$compile" == "yes" ]] && (( frag_count > 1 )); then
+    local compilation_output="$output_dir/compilation.mp4"
+    log "Compiling $frag_count fragments"
+
+    ffmpeg \
+      -y \
+      -hide_banner \
+      -loglevel error \
+      -f concat \
+      -safe 0 \
+      -i "$concat_list" \
+      -c copy \
+      -movflags +faststart \
+      "$compilation_output"
+
+    printf 'compilation written to %s\n' "$compilation_output"
+  fi
+
+  cleanup_extract_stage
+  trap - EXIT
+
+  log "Extract complete: $frag_count fragment(s)"
+}
+
 main() {
   local command="${1:-}"
 
@@ -1457,6 +1923,9 @@ main() {
       ;;
     preview)
       preview_command "$@"
+      ;;
+    extract)
+      extract_command "$@"
       ;;
     caffeinate)
       local subcommand="${1:-}"

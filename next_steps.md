@@ -5,8 +5,9 @@ This file tracks the immediate follow-on work after the Phase 0 local macOS soak
 ## Current Position
 
 - `bin/capture.sh` works for local frame capture
-- `bin/livelapse` now supports `status`, `start`, `stop`, `logs <feed-name>`, `peek <feed-name>`, and `preview <feed-name>` plus `caffeinate start|stop|status` on macOS
-- macOS local capture can now be managed through the CLI with interactive selectors, confirmations, and `--dry-run` guardrails
+- `bin/livelapse` now supports `status`, `start`, `stop`, `logs`, `peek`, `watch`, `preview`, `extract`, and `caffeinate start|stop|status`
+- `extract` renders timestamped fragments from captured frames into numbered MP4s; supports manifest files with `# feed:` / `# date:` headers, per-entry frame padding, multi-point and range timestamps, and `--compile` to join all fragments
+- macOS local capture can be managed through the CLI with interactive selectors, confirmations, and `--dry-run` guardrails
 - Linux deployment has install and systemd scaffolding, but has not been validated end-to-end on Ubuntu yet
 - DigitalOcean block storage automation is still planned work, not current implementation
 

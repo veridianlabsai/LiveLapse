@@ -26,17 +26,22 @@ The README "CLI Reference" section notes what is implemented vs. planned. As of 
 
 **Implemented in `bin/livelapse`:**
 - `status` — feed table (state, PID, last frame UTC, frame count)
+- `start [feed-name]` — interactive picker or named feed; macOS PID-based, Linux systemd
+- `stop [feed-name]` — interactive picker with confirmation; macOS PID-based, Linux systemd
 - `logs <feed-name>` — tails local log (macOS) or wraps journalctl (Linux)
+- `peek <feed-name>` — writes latest frame bytes to stdout for piping or redirection
+- `watch <feed-name>` — live inline frame display, auto-refreshes; renders via chafa/viu/iTerm2/Kitty
 - `preview <feed-name>` — renders a point-in-time MP4 without stopping capture
+- `extract [feed-name]` — extracts timestamped fragments from captured frames into numbered MP4s
 - `caffeinate start|stop|status` — macOS idle-sleep prevention via launchctl
 
-**Not yet implemented (manual workflow required):**
-- `start` / `stop` — see `docs/macos-runbook.md` for the manual `nohup` pattern
-- `stitch`, `add`, `remove`, `peek`, `disk`
+**Not yet implemented:**
+- `stitch`, `add`, `remove`, `disk`
 
 ## Navigation Notes
 
-- Feed lifecycle is in `bin/livelapse` functions `status_command`, `logs_command`, `preview_command`
+- Feed lifecycle is in `bin/livelapse` functions `start_command`, `stop_command`, `status_command`, `logs_command`, `preview_command`, `extract_command`
+- Fragment extraction uses an inline Python heredoc in `extract_command` for manifest parsing and frame selection
 - Feed parsing and PID helpers are in `bin/common.sh`
 - The capture loop retry logic is in `bin/capture.sh` — the `while true` at the bottom
 - Platform detection (`is_darwin`, `is_linux`) is in `bin/common.sh`

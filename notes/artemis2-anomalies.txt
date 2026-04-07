@@ -1,0 +1,10 @@
+# feed: artemis2-3rd
+# date: 2026-04-06
+09:07 | moon is small again | 60
+12:03-12:20 | small dot flies | 60
+12:05, 12:07 | new dot flies | 60
+12:37-12:28 | another dot | 60
+14:10 | robot arm moves looks cgi | 60
+18:36 | two moons one small one huge | 60
+19:24 | one moon small like in the beginning | 60
+19:27 | only the small moon appears for few seconds | 60

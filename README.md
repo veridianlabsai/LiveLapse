@@ -206,6 +206,12 @@ Health checks run every 60 seconds via cron, checking frame age per feed and dis
 ./bin/livelapse preview <feed-name> --output ./out/preview.mp4
 ./bin/livelapse preview <feed-name> --add-timestamp     # Burn capture time into each frame
 ./bin/livelapse preview <feed-name> --add-timestamp --timestamp-tz et
+./bin/livelapse extract --manifest notes/anomalies.txt             # Extract fragments (feed + date from headers)
+./bin/livelapse extract artemis-main --manifest notes/anomalies.txt
+./bin/livelapse extract --manifest notes/anomalies.txt --compile   # Also produce a joined compilation.mp4
+./bin/livelapse extract artemis-main --at 09:07 --date 2026-04-06 --pad 60
+./bin/livelapse extract artemis-main --from 12:03 --to 12:20 --date 2026-04-06 --pad 60
+./bin/livelapse extract artemis-main --at 09:07 --date 2026-04-06 --pad-left 60 --pad-right 20
 ./bin/livelapse caffeinate start                        # Prevent idle sleep (macOS)
 ./bin/livelapse caffeinate stop
 ./bin/livelapse caffeinate status
@@ -237,6 +243,17 @@ Watch notes:
 - Renderer detection is automatic: iTerm2 and Kitty use native inline images; falls back to `chafa` or `viu` if installed
 - `--interval <seconds>` controls the refresh rate (default 1s); `--once` shows a single frame and exits
 - Read-only — never touches capture processes, PIDs, or log files
+
+Extract notes:
+
+- Renders short MP4 clips from captured frames, one per timestamped entry, numbered `001_label.mp4`, `002_...`
+- Manifest format — one entry per line: `<timestamp> | <label> [| <pad_left> [| <pad_right>]]`
+- Timestamp formats: single `HH:MM`, range `HH:MM-HH:MM`, multi-point `HH:MM, HH:MM`
+- Padding is in **frames** (not seconds); omit for no padding
+- Inverted ranges auto-swap: `12:37-12:28` is treated as `12:28-12:37`
+- Manifest headers `# feed: <name>` and `# date: <YYYY-MM-DD>` make the file self-contained — CLI args override them
+- `--compile` joins all fragment MP4s into a single `compilation.mp4` in the output directory
+- Output: `$LIVELAPSE_DATA_DIR/output/extracts/<feed>/`
 
 ### Planned next
 

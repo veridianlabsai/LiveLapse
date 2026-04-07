@@ -69,6 +69,24 @@ HEALTHCHECK_DISK_THRESHOLD=80      # Disk % threshold
 
 All commands run from the repo root: `./bin/livelapse <command>`
 
+### start / stop
+
+```bash
+./bin/livelapse start                     # Interactive picker of stopped feeds in a TTY
+./bin/livelapse start artemis2-main
+./bin/livelapse start artemis2-main --dry-run
+./bin/livelapse stop                      # Interactive picker of running feeds in a TTY
+./bin/livelapse stop artemis2-main
+./bin/livelapse stop artemis2-main --yes  # Skip confirmation (non-interactive)
+./bin/livelapse stop artemis2-main --dry-run
+```
+
+- macOS: spawns `bin/capture.sh` via `nohup`, writes PID to `.pids/<feed>.pid`
+- Linux: wraps `systemctl start/stop livelapse@<feed>`
+- `start` refuses to silently duplicate an already-running feed — offers a stop-and-restart path instead
+- `stop` always asks for confirmation in an interactive terminal
+- Omitting the feed name in a TTY shows an operation-aware selector (stopped feeds for start, running feeds for stop)
+
 ### status
 
 ```bash
@@ -126,6 +144,40 @@ Displays the latest captured frame inline in the terminal and refreshes automati
 
 Renderer detection: prefers `chafa` (install via `brew install chafa`), then `viu`, then Kitty/iTerm2 native inline images. Read-only — never touches capture processes or PIDs.
 
+### extract
+
+```bash
+# Manifest mode — self-contained file with # feed: and # date: headers
+./bin/livelapse extract --manifest notes/anomalies.txt
+./bin/livelapse extract --manifest notes/anomalies.txt --compile    # Also join into compilation.mp4
+./bin/livelapse extract artemis2-3rd --manifest notes/anomalies.txt # CLI feed name overrides header
+
+# Single-entry mode
+./bin/livelapse extract artemis2-3rd --at 09:07 --date 2026-04-06 --pad 60 --label "moon"
+./bin/livelapse extract artemis2-3rd --from 12:03 --to 12:20 --date 2026-04-06 --pad 60
+./bin/livelapse extract artemis2-3rd --at 09:07 --date 2026-04-06 --pad-left 60 --pad-right 20
+```
+
+**Manifest format** (one entry per line):
+
+```
+# feed: artemis2-3rd
+# date: 2026-04-06
+09:07 | moon is small again | 60
+12:03-12:20 | small dot flies | 60
+12:05, 12:07 | new dot flies | 60
+12:37-12:28 | another dot | 60          # inverted range — auto-swaps to 12:28-12:37
+14:10 | robot arm | 60 | 20             # 60 frames before, 20 after
+18:36 | two moons
+```
+
+Key behaviours:
+- Padding is in **frames** (not seconds); omit for zero padding
+- `HH:MM` timestamps cover the entire minute; `HH:MM:SS` targets the exact second
+- Multi-point `HH:MM, HH:MM` spans from the earliest to the latest timestamp
+- Output: `$LIVELAPSE_DATA_DIR/output/extracts/<feed>/001_label.mp4`, `002_...`, etc.
+- `--compile` concatenates all fragments into `compilation.mp4` in the same directory
+
 ### caffeinate (macOS only)
 
 ```bash
@@ -140,10 +192,8 @@ Required for long local runs. Keep the lid open and machine on power.
 
 ## CLI — Not Yet Implemented
 
-These commands are planned but not yet backed into `bin/livelapse`. Use the manual workflows below in the meantime.
-
 ```
-stitch <name> [opts]      Assemble frames into a timelapse
+stitch <name> [opts]      Assemble all captured frames into a full timelapse
 add <name> <url> [fps]    Add a feed and start immediately
 remove <name>             Stop and remove a feed
 disk                      Disk usage per feed and total
@@ -311,7 +361,6 @@ Resource estimates (720p WebP lossless, 1 fps per feed):
 
 See `next_steps.md` for the full implementation plan. Priority:
 
-1. `start` / `stop` CLI commands (macOS PID-based, Linux systemd)
-2. `stitch` command with time-range filtering
-3. Manual Ubuntu end-to-end validation
-4. `install/do-provision.sh` for DigitalOcean automation
+1. Manual Ubuntu end-to-end validation
+2. `stitch` command — full timelapse from all captured frames with time-range filtering
+3. `install/do-provision.sh` for DigitalOcean automation
