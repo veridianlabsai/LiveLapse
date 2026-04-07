@@ -273,6 +273,8 @@ Extract notes:
 - Timestamp formats: single `HH:MM`, range `HH:MM-HH:MM`, multi-point `HH:MM, HH:MM`
 - Short manifest timestamps are interpreted in the manifest timezone and then converted to UTC for frame selection
 - `--manifest-tz <zone>` sets that timezone; default is Eastern to match the default burned timestamps in `preview`
+- Accepted shortcuts: `et`, `est`, `edt`, `eastern` -> `America/New_York`; `ct`, `cst`, `cdt` -> `America/Chicago`; `mt`, `mst`, `mdt` -> `America/Denver`; `pt`, `pst`, `pdt`, `pacific` -> `America/Los_Angeles`; `utc`, `z` -> `UTC`
+- Full IANA names like `America/New_York`, `Europe/Paris`, and `Asia/Tokyo` also work. For the canonical format, see Python's [`zoneinfo` docs](https://docs.python.org/3/library/zoneinfo.html) and IANA's [time zone database overview](https://data.iana.org/time-zones/tzdb-2022d/tz-link.html).
 - Per-line date: prefix any timestamp with `YYYY-MM-DD` to override the header date for that entry (useful for multi-day captures)
 - Padding is in **frames** (not seconds); omit for no padding. If frames are missing, `60` frames of pad can span more than 60 wall-clock seconds.
 - Inverted ranges auto-swap: `12:37-12:28` is treated as `12:28-12:37`
