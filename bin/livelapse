@@ -20,8 +20,8 @@ Usage:
   bin/livelapse peek <feed-name>
   bin/livelapse watch <feed-name> [--interval <seconds>] [--once]
   bin/livelapse preview <feed-name> [--playback-fps <fps>] [--output <path>] [--add-timestamp] [--timestamp-tz <zone>]
-  bin/livelapse extract [feed-name] --manifest <file> [--date <YYYY-MM-DD>] [--pad <n>] [--playback-fps <fps>] [--output <dir>] [--compile] [--add-timestamp] [--timestamp-tz <zone>]
-  bin/livelapse extract <feed-name> --at <time> --date <YYYY-MM-DD> [--pad <n>] [--label <text>] [--fragment <n>] [--add-timestamp] [--timestamp-tz <zone>]
+  bin/livelapse extract [feed-name] --manifest <file> [--date <YYYY-MM-DD>] [--manifest-tz <zone>] [--pad <n>] [--playback-fps <fps>] [--output <dir>] [--compile] [--add-timestamp] [--timestamp-tz <zone>]
+  bin/livelapse extract <feed-name> --at <time> --date <YYYY-MM-DD> [--manifest-tz <zone>] [--pad <n>] [--label <text>] [--fragment <n>] [--add-timestamp] [--timestamp-tz <zone>]
   bin/livelapse caffeinate start
   bin/livelapse caffeinate stop
   bin/livelapse caffeinate status
@@ -1452,6 +1452,7 @@ render_extract_fragment() {
   local frag_stage_dir="$5"
   local add_timestamp="${6:-no}"
   local timestamp_tz="${7:-$DEFAULT_TIMESTAMP_TZ}"
+  local fragment_label="${8:-fragment}"
 
   local count=0
   while IFS= read -r frame_path; do
@@ -1470,7 +1471,11 @@ render_extract_fragment() {
 
   if [[ "$add_timestamp" == "yes" ]]; then
     local subtitle_file="$frag_stage_dir/timestamp.ass"
-    generate_timestamp_subtitles "$frag_manifest" "$subtitle_file" "$playback_fps" "$timestamp_tz" >/dev/null
+    local overlay_info resolved_timestamp_tz first_overlay_label
+    overlay_info="$(generate_timestamp_subtitles "$frag_manifest" "$subtitle_file" "$playback_fps" "$timestamp_tz")"
+    IFS='|' read -r resolved_timestamp_tz first_overlay_label <<<"$overlay_info"
+    log "Timestamp overlay enabled for $fragment_label (requested $timestamp_tz, resolved $resolved_timestamp_tz)"
+    log "First burned label: $first_overlay_label"
     video_filter="${video_filter},ass='${subtitle_file}'"
   fi
 
@@ -1494,6 +1499,8 @@ extract_command() {
   local feed_name=""
   local extract_date=""
   local manifest_file=""
+  local manifest_tz="$DEFAULT_TIMESTAMP_TZ"
+  local manifest_tz_explicit="no"
   local at_time=""
   local from_time=""
   local to_time=""
@@ -1522,6 +1529,12 @@ extract_command() {
         shift
         if [[ $# -eq 0 ]]; then log "Missing value for --date"; return 1; fi
         extract_date="$1"
+        ;;
+      --manifest-tz)
+        shift
+        if [[ $# -eq 0 ]]; then log "Missing value for --manifest-tz"; return 1; fi
+        manifest_tz="$1"
+        manifest_tz_explicit="yes"
         ;;
       --manifest)
         shift
@@ -1612,7 +1625,7 @@ extract_command() {
     return 1
   fi
 
-  # Extract manifest headers: # feed: and # date:
+  # Extract manifest headers: # feed:, # date:, and # timezone:
   if [[ -n "$manifest_file" ]]; then
     local header_val=""
     if [[ -z "$feed_name" ]]; then
@@ -1625,6 +1638,16 @@ extract_command() {
       header_val="$(grep -m1 '^[[:space:]]*#[[:space:]]*date:' "$manifest_file" | sed 's/^[[:space:]]*#[[:space:]]*date:[[:space:]]*//' | tr -d '[:space:]')" || true
       if [[ -n "$header_val" ]]; then
         extract_date="$header_val"
+      fi
+    fi
+    if [[ "$manifest_tz_explicit" == "no" ]]; then
+      header_val="$(
+        grep -E -m1 '^[[:space:]]*#[[:space:]]*(timezone|manifest-tz):' "$manifest_file" \
+          | sed -E 's/^[[:space:]]*#[[:space:]]*(timezone|manifest-tz):[[:space:]]*//' \
+          | tr -d '[:space:]'
+      )" || true
+      if [[ -n "$header_val" ]]; then
+        manifest_tz="$header_val"
       fi
     fi
   fi
@@ -1695,9 +1718,14 @@ extract_command() {
   log "Extracting fragments from $feed_name"
   log "Source: $source_dir ($total_frames frames)"
   log "Output: $output_dir"
+  log "Short manifest timestamps are interpreted in $manifest_tz and converted to UTC for frame selection"
+
+  if [[ "$add_timestamp" == "yes" ]]; then
+    log "Burned labels display in $timestamp_tz"
+  fi
 
   # Parse manifest and select frames per fragment
-  python3 - "$all_frames_file" "$stage_dir" "$extract_date" "$pad_left" "$pad_right" "$fragment_start" "$manifest_input" <<'PYEOF'
+  python3 - "$all_frames_file" "$stage_dir" "$extract_date" "$pad_left" "$pad_right" "$fragment_start" "$manifest_input" "$manifest_tz" <<'PYEOF'
 from __future__ import annotations
 
 import bisect
@@ -1705,6 +1733,7 @@ import re
 import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 
 def slugify(text: str) -> str:
@@ -1712,7 +1741,30 @@ def slugify(text: str) -> str:
     return re.sub(r'-+', '-', slug).strip('-')[:60] or 'fragment'
 
 
-def parse_time(raw: str, date_prefix: str) -> datetime:
+def resolve_timezone(requested: str) -> str:
+    aliases = {
+        "est": "America/New_York",
+        "edt": "America/New_York",
+        "et": "America/New_York",
+        "eastern": "America/New_York",
+        "pst": "America/Los_Angeles",
+        "pdt": "America/Los_Angeles",
+        "pt": "America/Los_Angeles",
+        "pacific": "America/Los_Angeles",
+        "cst": "America/Chicago",
+        "cdt": "America/Chicago",
+        "ct": "America/Chicago",
+        "mst": "America/Denver",
+        "mdt": "America/Denver",
+        "mt": "America/Denver",
+        "utc": "UTC",
+        "z": "UTC",
+    }
+    cleaned = requested.strip()
+    return aliases.get(cleaned.lower(), cleaned)
+
+
+def parse_time(raw: str, date_prefix: str, manifest_zone: ZoneInfo) -> datetime:
     t = raw.strip()
     # Full ISO: 2026-04-06T09:07:00Z or 2026-04-06T09_07_00Z
     if 'T' in t and len(t) > 10:
@@ -1729,9 +1781,10 @@ def parse_time(raw: str, date_prefix: str) -> datetime:
             sys.exit(1)
         parts = t.split(':')
         h = parts[0].zfill(2)
-        return datetime.strptime(
+        local_dt = datetime.strptime(
             f'{date_prefix}T{h}:{parts[1]}:{parts[2]}', '%Y-%m-%dT%H:%M:%S'
-        ).replace(tzinfo=timezone.utc)
+        ).replace(tzinfo=manifest_zone)
+        return local_dt.astimezone(timezone.utc)
     # HH:MM
     if re.match(r'^\d{1,2}:\d{2}$', t):
         if not date_prefix:
@@ -1739,9 +1792,10 @@ def parse_time(raw: str, date_prefix: str) -> datetime:
             sys.exit(1)
         parts = t.split(':')
         h = parts[0].zfill(2)
-        return datetime.strptime(
+        local_dt = datetime.strptime(
             f'{date_prefix}T{h}:{parts[1]}:00', '%Y-%m-%dT%H:%M:%S'
-        ).replace(tzinfo=timezone.utc)
+        ).replace(tzinfo=manifest_zone)
+        return local_dt.astimezone(timezone.utc)
     print(f'Cannot parse timestamp: {t}', file=sys.stderr)
     sys.exit(1)
 
@@ -1750,15 +1804,15 @@ def has_seconds(raw: str) -> bool:
     return len(raw.strip().split(':')) >= 3
 
 
-def parse_spec(spec: str, date_prefix: str) -> tuple[datetime, datetime]:
+def parse_spec(spec: str, date_prefix: str, manifest_zone: ZoneInfo) -> tuple[datetime, datetime]:
     spec = spec.strip()
     # Range: HH:MM-HH:MM or HH:MM:SS-HH:MM:SS
     m = re.match(
         r'^(\d{1,2}:\d{2}(?::\d{2})?)\s*-\s*(\d{1,2}:\d{2}(?::\d{2})?)$', spec
     )
     if m:
-        s = parse_time(m.group(1), date_prefix)
-        e = parse_time(m.group(2), date_prefix)
+        s = parse_time(m.group(1), date_prefix, manifest_zone)
+        e = parse_time(m.group(2), date_prefix, manifest_zone)
         if e < s:
             s, e = e, s
         if not has_seconds(m.group(2)):
@@ -1769,14 +1823,14 @@ def parse_spec(spec: str, date_prefix: str) -> tuple[datetime, datetime]:
         raw_parts = [p.strip() for p in spec.split(',')]
         windows = []
         for raw in raw_parts:
-            t = parse_time(raw, date_prefix)
+            t = parse_time(raw, date_prefix, manifest_zone)
             if has_seconds(raw):
                 windows.append((t, t))
             else:
                 windows.append((t, t + timedelta(seconds=59)))
         return min(w[0] for w in windows), max(w[1] for w in windows)
     # Single timestamp
-    s = parse_time(spec, date_prefix)
+    s = parse_time(spec, date_prefix, manifest_zone)
     if has_seconds(spec):
         return s, s
     return s, s + timedelta(seconds=59)
@@ -1791,6 +1845,14 @@ default_pl = int(sys.argv[4])
 default_pr = int(sys.argv[5])
 frag_start = int(sys.argv[6])
 manifest_path = Path(sys.argv[7])
+manifest_tz_requested = sys.argv[8]
+
+resolved_manifest_tz = resolve_timezone(manifest_tz_requested)
+try:
+    manifest_zone = ZoneInfo(resolved_manifest_tz)
+except ZoneInfoNotFoundError:
+    print(f'Unknown manifest timezone: {manifest_tz_requested}', file=sys.stderr)
+    sys.exit(1)
 
 # Load sorted frame list and parse timestamps from filenames
 frames: list[tuple[datetime, str]] = []
@@ -1834,7 +1896,7 @@ for line in manifest_path.read_text().splitlines():
     else:
         pl = default_pl
         pr = default_pr
-    start, end = parse_spec(ts, line_date)
+    start, end = parse_spec(ts, line_date, manifest_zone)
     entries.append((start, end, label, pl, pr))
 
 if not entries:
@@ -1860,7 +1922,24 @@ for i, (start, end, label, pl, pr) in enumerate(entries):
     selected = [frames[j][1] for j in range(ps, pe)]
     frag_file = stage_dir / f'frag_{frag_num:03d}.txt'
     frag_file.write_text('\n'.join(selected) + '\n')
-    meta.append(f'{frag_num:03d}|{slugify(label)}|{len(selected)}|{label}')
+    meta.append(
+        '|'.join(
+            [
+                f'{frag_num:03d}',
+                slugify(label),
+                str(len(selected)),
+                label,
+                start.isoformat(),
+                end.isoformat(),
+                frames[si][0].isoformat(),
+                frames[ei - 1][0].isoformat(),
+                frames[ps][0].isoformat(),
+                frames[pe - 1][0].isoformat(),
+                str(pl),
+                str(pr),
+            ]
+        )
+    )
 
 summary = stage_dir / 'fragments.txt'
 summary.write_text('\n'.join(meta) + '\n')
@@ -1877,7 +1956,7 @@ PYEOF
   local frag_count=0
   local concat_list="$stage_dir/concat.txt"
 
-  while IFS='|' read -r frag_num frag_slug frag_frames frag_label; do
+  while IFS='|' read -r frag_num frag_slug frag_frames frag_label requested_start requested_end core_start core_end selected_start selected_end frag_pad_left frag_pad_right; do
     [[ -n "$frag_num" ]] || continue
     frag_count=$((frag_count + 1))
 
@@ -1888,9 +1967,12 @@ PYEOF
     mkdir -p "$frag_stage"
 
     log "Rendering fragment $frag_num: $frag_label ($frag_frames frames)"
+    log "Requested UTC window: $requested_start to $requested_end"
+    log "Core frame UTC window: $core_start to $core_end"
+    log "Selected UTC window: $selected_start to $selected_end (pad-left=$frag_pad_left frames, pad-right=$frag_pad_right frames)"
 
     local rendered_frames
-    rendered_frames="$(render_extract_fragment "$frag_manifest" "$output_file" "$playback_fps" "$frame_ext" "$frag_stage" "$add_timestamp" "$timestamp_tz")"
+    rendered_frames="$(render_extract_fragment "$frag_manifest" "$output_file" "$playback_fps" "$frame_ext" "$frag_stage" "$add_timestamp" "$timestamp_tz" "$frag_num")"
 
     local duration
     duration="$(awk "BEGIN { printf \"%.2f\", $rendered_frames / $playback_fps }")"

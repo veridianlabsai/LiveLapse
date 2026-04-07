@@ -223,8 +223,9 @@ Once frames exist, the rest of the CLI works against the archive in place:
 ./bin/livelapse preview <feed-name> --output ./out/preview.mp4
 ./bin/livelapse preview <feed-name> --add-timestamp     # Burn capture time into each frame
 ./bin/livelapse preview <feed-name> --add-timestamp --timestamp-tz et
-./bin/livelapse extract --manifest notes/anomalies.txt             # Extract fragments (feed + date from headers)
+./bin/livelapse extract --manifest notes/anomalies.txt             # Extract fragments (feed + date from headers; short times default to ET)
 ./bin/livelapse extract artemis-main --manifest notes/anomalies.txt
+./bin/livelapse extract --manifest notes/anomalies.txt --manifest-tz utc
 ./bin/livelapse extract --manifest notes/anomalies.txt --compile   # Also produce a joined compilation.mp4
 ./bin/livelapse extract --manifest notes/anomalies.txt --add-timestamp
 ./bin/livelapse extract --manifest notes/anomalies.txt --add-timestamp --timestamp-tz utc
@@ -270,11 +271,14 @@ Extract notes:
 - The manifest acts like a lightweight editor decision list (EDL): note moments while reviewing, then rerender them deterministically from the frame archive
 - Manifest format — one entry per line: `[YYYY-MM-DD] <timestamp> | <label> [| <pad_left> [| <pad_right>]]`
 - Timestamp formats: single `HH:MM`, range `HH:MM-HH:MM`, multi-point `HH:MM, HH:MM`
+- Short manifest timestamps are interpreted in the manifest timezone and then converted to UTC for frame selection
+- `--manifest-tz <zone>` sets that timezone; default is Eastern to match the default burned timestamps in `preview`
 - Per-line date: prefix any timestamp with `YYYY-MM-DD` to override the header date for that entry (useful for multi-day captures)
-- Padding is in **frames** (not seconds); omit for no padding
+- Padding is in **frames** (not seconds); omit for no padding. If frames are missing, `60` frames of pad can span more than 60 wall-clock seconds.
 - Inverted ranges auto-swap: `12:37-12:28` is treated as `12:28-12:37`
-- Manifest headers `# feed: <name>` and `# date: <YYYY-MM-DD>` make the file self-contained — CLI args override them
+- Manifest headers `# feed: <name>`, `# date: <YYYY-MM-DD>`, and optional `# timezone: <zone>` make the file self-contained — CLI args override them
 - `--compile` joins all fragment MP4s into a single `compilation.mp4` in the output directory
+- Burned timestamp labels still use the display timezone from `--timestamp-tz`; pass `--timestamp-tz utc` if you want the overlay to match manifest timestamps exactly
 - Output: `$LIVELAPSE_DATA_DIR/output/extracts/<feed>/`
 
 ### Planned next
