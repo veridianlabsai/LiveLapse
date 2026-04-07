@@ -20,8 +20,8 @@ Usage:
   bin/livelapse peek <feed-name>
   bin/livelapse watch <feed-name> [--interval <seconds>] [--once]
   bin/livelapse preview <feed-name> [--playback-fps <fps>] [--output <path>] [--add-timestamp] [--timestamp-tz <zone>]
-  bin/livelapse extract [feed-name] --manifest <file> [--date <YYYY-MM-DD>] [--pad <n>] [--playback-fps <fps>] [--output <dir>] [--compile]
-  bin/livelapse extract <feed-name> --at <time> --date <YYYY-MM-DD> [--pad <n>] [--label <text>] [--fragment <n>]
+  bin/livelapse extract [feed-name] --manifest <file> [--date <YYYY-MM-DD>] [--pad <n>] [--playback-fps <fps>] [--output <dir>] [--compile] [--add-timestamp] [--timestamp-tz <zone>]
+  bin/livelapse extract <feed-name> --at <time> --date <YYYY-MM-DD> [--pad <n>] [--label <text>] [--fragment <n>] [--add-timestamp] [--timestamp-tz <zone>]
   bin/livelapse caffeinate start
   bin/livelapse caffeinate stop
   bin/livelapse caffeinate status
@@ -1450,6 +1450,8 @@ render_extract_fragment() {
   local playback_fps="$3"
   local frame_ext="$4"
   local frag_stage_dir="$5"
+  local add_timestamp="${6:-no}"
+  local timestamp_tz="${7:-$DEFAULT_TIMESTAMP_TZ}"
 
   local count=0
   while IFS= read -r frame_path; do
@@ -1464,13 +1466,22 @@ render_extract_fragment() {
     return 1
   fi
 
+  local video_filter='pad=ceil(iw/2)*2:ceil(ih/2)*2'
+
+  if [[ "$add_timestamp" == "yes" ]]; then
+    local subtitle_file="$frag_stage_dir/timestamp.ass"
+    generate_timestamp_subtitles "$frag_manifest" "$subtitle_file" "$playback_fps" "$timestamp_tz" >/dev/null
+    video_filter="${video_filter},ass='${subtitle_file}'"
+  fi
+
   ffmpeg \
+    -nostdin \
     -y \
     -hide_banner \
     -loglevel error \
     -framerate "$playback_fps" \
     -i "$frag_stage_dir/%06d.${frame_ext}" \
-    -vf 'pad=ceil(iw/2)*2:ceil(ih/2)*2' \
+    -vf "$video_filter" \
     -c:v libx264 \
     -pix_fmt yuv420p \
     -movflags +faststart \
@@ -1493,9 +1504,20 @@ extract_command() {
   local playback_fps="$DEFAULT_PREVIEW_FPS"
   local output_dir=""
   local compile="no"
+  local add_timestamp="no"
+  local timestamp_tz="$DEFAULT_TIMESTAMP_TZ"
 
   while [[ $# -gt 0 ]]; do
     case "$1" in
+      --add-timestamp)
+        add_timestamp="yes"
+        ;;
+      --timestamp-tz)
+        shift
+        if [[ $# -eq 0 ]]; then log "Missing value for --timestamp-tz"; return 1; fi
+        timestamp_tz="$1"
+        add_timestamp="yes"
+        ;;
       --date)
         shift
         if [[ $# -eq 0 ]]; then log "Missing value for --date"; return 1; fi
@@ -1790,6 +1812,8 @@ if not frames:
 frame_dts = [f[0] for f in frames]
 
 # Parse manifest
+LINE_DATE_RE = re.compile(r'^(\d{4}-\d{2}-\d{2})\s+(.*)')
+
 entries: list[tuple[datetime, datetime, str, int, int]] = []
 for line in manifest_path.read_text().splitlines():
     line = line.strip()
@@ -1797,6 +1821,12 @@ for line in manifest_path.read_text().splitlines():
         continue
     parts = [p.strip() for p in line.split('|')]
     ts = parts[0]
+    # Per-line date override: "2026-04-07 12:03-12:20" extracts the date
+    line_date = date_prefix
+    m = LINE_DATE_RE.match(ts)
+    if m:
+        line_date = m.group(1)
+        ts = m.group(2)
     label = parts[1] if len(parts) > 1 and parts[1] else ts
     if len(parts) > 2 and parts[2]:
         pl = int(parts[2])
@@ -1804,7 +1834,7 @@ for line in manifest_path.read_text().splitlines():
     else:
         pl = default_pl
         pr = default_pr
-    start, end = parse_spec(ts, date_prefix)
+    start, end = parse_spec(ts, line_date)
     entries.append((start, end, label, pl, pr))
 
 if not entries:
@@ -1860,7 +1890,7 @@ PYEOF
     log "Rendering fragment $frag_num: $frag_label ($frag_frames frames)"
 
     local rendered_frames
-    rendered_frames="$(render_extract_fragment "$frag_manifest" "$output_file" "$playback_fps" "$frame_ext" "$frag_stage")"
+    rendered_frames="$(render_extract_fragment "$frag_manifest" "$output_file" "$playback_fps" "$frame_ext" "$frag_stage" "$add_timestamp" "$timestamp_tz")"
 
     local duration
     duration="$(awk "BEGIN { printf \"%.2f\", $rendered_frames / $playback_fps }")"

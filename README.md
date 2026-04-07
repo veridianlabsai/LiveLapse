@@ -3,11 +3,13 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 ![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Ubuntu%2024%2B-blue)
 
-> Capture any live stream as timestamped frames. Run it forever. Never miss a moment.
+> Self-hosted live stream capture, review, and timelapse extraction for long-running events.
 
-Self-hosted timelapse engine for YouTube Live, RTSP, HLS, and anything yt-dlp or ffmpeg can reach. Point it at a stream, walk away, and come back to a precisely timestamped archive ready to render into a video at any speed.
+LiveLapse is an operator-grade stream archive for YouTube Live, RTSP, HLS, and anything `yt-dlp` or `ffmpeg` can reach. It captures durable UTC-timestamped frames, keeps reconnecting when streams drop, and leaves behind a filesystem-native record you can inspect with ordinary tools.
 
-No database. No cloud dependency. No moving parts beyond a shell script and a cron job.
+It also covers the work after capture starts: monitor feeds from the terminal, render previews without interrupting capture, and cut exact highlight clips from EDL-like timestamp manifests when the event is over.
+
+No database. No cloud dependency. Just plain files, a shell CLI, and platform-native process supervision.
 
 ---
 
@@ -15,21 +17,21 @@ No database. No cloud dependency. No moving parts beyond a shell script and a cr
 
 LiveLapse was built by [Veridian Labs](https://veridianlabs.co) to capture NASA's Artemis II lunar flyby — a once-in-a-generation event broadcasting live across multiple feeds simultaneously on April 6, 2026. We needed something that could run unattended for 24+ hours, survive stream drops, capture across multiple feeds in parallel, and produce clean timelapse footage afterward. Nothing off the shelf did all of that simply, so we built it.
 
-The Artemis II use case shaped the design, but the tool itself is general-purpose. If you have a live stream and want a permanent, timestamped record of it — LiveLapse is for you.
+The Artemis II use case shaped the design, but the tool itself is general-purpose. If you need a long-running stream archive that is easy to operate during the event and easy to turn into footage afterward, LiveLapse is for you.
 
 ---
 
 ## Why LiveLapse?
 
-Most screen recorders and stream downloaders aren't designed to run unattended for hours or days, reconnect automatically when a stream drops, or produce frame archives that survive restarts without gaps or filename collisions. LiveLapse is.
+Most tools only solve one slice of the job: downloading a stream, watching it live, or editing after the fact. LiveLapse is built for the full operator loop.
 
-- **Any source** — YouTube Live, RTSP cameras, HLS, RTMP, or any URL yt-dlp understands
-- **Self-hosted** — your frames, your disk, your infrastructure
-- **Runs forever** — systemd-managed with automatic reconnect on stream drop
-- **No collisions** — ISO 8601 timestamped filenames; restarts never overwrite existing frames
-- **No database** — the filesystem is the database; browse, inspect, and manage frames with standard tools
-- **Point-in-time previews** — render a video from captured frames without stopping capture
-- **Health monitoring** — stale frame and disk alerts via email (Resend), rate-limited and cron-driven
+- **Capture almost anything** — YouTube Live, RTSP cameras, HLS, RTMP, or any URL yt-dlp understands
+- **Run unattended** — reconnect on stream drop, keep writing timestamped frames, and survive restarts without filename collisions
+- **Operate from the terminal** — `status`, `start`, `stop`, `logs`, `peek`, and `watch` give you live visibility and control
+- **Render without interruption** — build point-in-time previews while capture keeps running
+- **Extract exact moments** — turn a lightweight manifest / editor decision list into numbered MP4 clips, optional compilations, and timestamp-burned outputs
+- **Keep the archive simple** — the filesystem is the database; every frame is directly inspectable and scriptable
+- **Stay automation-friendly** — shell-first design, Linux systemd deployment, and AI-native repo context for operators and agents
 
 ---
 
@@ -72,7 +74,7 @@ cd /opt/livelapse
 
 # 3. Configure environment
 cp .env.example .env
-# Edit .env — set LIVELAPSE_DATA_DIR and optional alerting keys
+# Edit .env — set LIVELAPSE_DATA_DIR (alerting keys are reserved for planned health checks)
 
 # 4. Install dependencies
 ./install.sh
@@ -83,6 +85,15 @@ cp .env.example .env
 ```
 
 Frames appear in `$LIVELAPSE_DATA_DIR/<feed-name>/` within seconds.
+
+Once capture is running, the same CLI handles monitoring and post-processing:
+
+```bash
+./bin/livelapse status
+./bin/livelapse watch artemis-main
+./bin/livelapse preview artemis-main --add-timestamp
+./bin/livelapse extract --manifest notes/anomalies.txt --compile
+```
 
 ---
 
@@ -165,18 +176,24 @@ HEALTHCHECK_STALE_SECONDS=120  # Seconds with no new frames before alerting
 HEALTHCHECK_DISK_THRESHOLD=80  # Disk usage % threshold
 ```
 
+The alerting variables are staged in `.env.example` for upcoming health-check work. In the current implementation, you can leave them blank.
+
 ---
 
 ## How It Works
 
-Each feed runs as a systemd service (`livelapse@<feed-name>.service`) wrapping a `yt-dlp | ffmpeg` pipeline:
+Each feed is captured by a `yt-dlp | ffmpeg` pipeline. On Linux, `install.sh` deploys and enables a `livelapse@<feed-name>.service` unit per configured feed. On macOS, the CLI manages background capture processes and tracks PID and log files under `.pids/`.
 
 - `yt-dlp` resolves the stream URL and pipes video to ffmpeg
 - `ffmpeg` extracts frames at the configured rate, writing each as a timestamped file
 - On stream drop, the service waits `RETRY_DELAY` seconds and reconnects automatically
 - Filenames use `-strftime 1` so they reflect real wall-clock time — restarts produce no collisions and no gaps to reconcile
 
-Health checks run every 60 seconds via cron, checking frame age per feed and disk usage. Alerts are rate-limited to one per 10 minutes per feed per alert type.
+Once frames exist, the rest of the CLI works against the archive in place:
+
+- `status`, `logs`, `peek`, and `watch` inspect live or recent capture state without disturbing active feeds
+- `preview` renders a point-in-time MP4 from the current frame set
+- `extract` turns timestamp notes into numbered highlight clips and can also build a `compilation.mp4`
 
 ---
 
@@ -209,6 +226,8 @@ Health checks run every 60 seconds via cron, checking frame age per feed and dis
 ./bin/livelapse extract --manifest notes/anomalies.txt             # Extract fragments (feed + date from headers)
 ./bin/livelapse extract artemis-main --manifest notes/anomalies.txt
 ./bin/livelapse extract --manifest notes/anomalies.txt --compile   # Also produce a joined compilation.mp4
+./bin/livelapse extract --manifest notes/anomalies.txt --add-timestamp
+./bin/livelapse extract --manifest notes/anomalies.txt --add-timestamp --timestamp-tz utc
 ./bin/livelapse extract artemis-main --at 09:07 --date 2026-04-06 --pad 60
 ./bin/livelapse extract artemis-main --from 12:03 --to 12:20 --date 2026-04-06 --pad 60
 ./bin/livelapse extract artemis-main --at 09:07 --date 2026-04-06 --pad-left 60 --pad-right 20
@@ -219,6 +238,7 @@ Health checks run every 60 seconds via cron, checking frame age per feed and dis
 
 **Timestamp overlay notes (`--add-timestamp`):**
 
+- Supported by both `preview` and `extract`
 - Burns each frame's capture time into the video using the filename as the source of truth
 - `--timestamp-tz <zone>` sets the display timezone; common aliases (`utc`, `et`, `est`, `edt`, `pt`, `pst`, `pdt`) are accepted
 - Default is Eastern time — resolves to `America/New_York`, so DST dates show `EDT` automatically
@@ -247,8 +267,10 @@ Watch notes:
 Extract notes:
 
 - Renders short MP4 clips from captured frames, one per timestamped entry, numbered `001_label.mp4`, `002_...`
-- Manifest format — one entry per line: `<timestamp> | <label> [| <pad_left> [| <pad_right>]]`
+- The manifest acts like a lightweight editor decision list (EDL): note moments while reviewing, then rerender them deterministically from the frame archive
+- Manifest format — one entry per line: `[YYYY-MM-DD] <timestamp> | <label> [| <pad_left> [| <pad_right>]]`
 - Timestamp formats: single `HH:MM`, range `HH:MM-HH:MM`, multi-point `HH:MM, HH:MM`
+- Per-line date: prefix any timestamp with `YYYY-MM-DD` to override the header date for that entry (useful for multi-day captures)
 - Padding is in **frames** (not seconds); omit for no padding
 - Inverted ranges auto-swap: `12:37-12:28` is treated as `12:28-12:37`
 - Manifest headers `# feed: <name>` and `# date: <YYYY-MM-DD>` make the file self-contained — CLI args override them
@@ -282,6 +304,11 @@ livelapse stitch artemis-main \
 
 Options: `--start` / `--end` (ISO 8601), `--playback-fps` (default 30), `--output`, `--codec` (`libx264` / `libx265`), `--quality` (CRF, lower = better), `--dry-run`.
 
+### Roadmap
+
+- **Manifest as a richer decision list** — keep the manifest as the editor-facing review surface for notable moments, labels, padding, and multi-day captures
+- **Review full renders, then cut selects** — once `stitch` exists, a natural next step is scrubbing a full render, marking ranges, and sending those decisions back into `extract` as manifest entries or direct extractions
+
 ---
 
 ## Deployment
@@ -293,7 +320,7 @@ Options: `--start` / `--end` (ISO 8601), `--playback-fps` (default 30), `--outpu
 | Install deps | `brew install yt-dlp ffmpeg jq chafa` | `apt install yt-dlp ffmpeg jq curl bc chafa` |
 | Process management | Background process + PID file | systemd template units |
 | Logs | `.pids/<feed>.log` | `journalctl -u livelapse@<feed>` |
-| Health check | User crontab | `/etc/cron.d/livelapse` |
+| Alerting / health checks | Planned | Planned |
 | Sleep prevention | `livelapse caffeinate start` | Not needed |
 
 ### Resource Usage (720p, WebP lossless, 1 fps)

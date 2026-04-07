@@ -119,9 +119,11 @@ artemis2-2nd     stopped  -        2026-04-06T01:44:12Z   562
 ./bin/livelapse preview <feed-name>
 ./bin/livelapse preview <feed-name> --playback-fps 24
 ./bin/livelapse preview <feed-name> --output ./tmp/preview.mp4
+./bin/livelapse preview <feed-name> --add-timestamp
+./bin/livelapse preview <feed-name> --add-timestamp --timestamp-tz utc
 ```
 
-Snapshots the current frame list, stages symlinks in a temp dir, renders an MP4 with ffmpeg. Capture continues uninterrupted. Output lands in `$LIVELAPSE_DATA_DIR/output/intermediate/` by default. Prints output path, frame count, and playback duration on completion.
+Snapshots the current frame list, stages symlinks in a temp dir, renders an MP4 with ffmpeg. Capture continues uninterrupted. Output lands in `$LIVELAPSE_DATA_DIR/output/intermediate/` by default. `--add-timestamp` burns capture time into each frame (default ET, use `--timestamp-tz` for other zones). Prints output path, frame count, and playback duration on completion.
 
 ### peek
 
@@ -150,6 +152,8 @@ Renderer detection: prefers `chafa` (install via `brew install chafa`), then `vi
 # Manifest mode — self-contained file with # feed: and # date: headers
 ./bin/livelapse extract --manifest notes/anomalies.txt
 ./bin/livelapse extract --manifest notes/anomalies.txt --compile    # Also join into compilation.mp4
+./bin/livelapse extract --manifest notes/anomalies.txt --add-timestamp
+./bin/livelapse extract --manifest notes/anomalies.txt --add-timestamp --timestamp-tz utc
 ./bin/livelapse extract artemis2-3rd --manifest notes/anomalies.txt # CLI feed name overrides header
 
 # Single-entry mode
@@ -158,7 +162,7 @@ Renderer detection: prefers `chafa` (install via `brew install chafa`), then `vi
 ./bin/livelapse extract artemis2-3rd --at 09:07 --date 2026-04-06 --pad-left 60 --pad-right 20
 ```
 
-**Manifest format** (one entry per line):
+**Manifest format** (one entry per line): `[YYYY-MM-DD] <timestamp> | <label> [| <pad_left> [| <pad_right>]]`
 
 ```
 # feed: artemis2-3rd
@@ -169,12 +173,15 @@ Renderer detection: prefers `chafa` (install via `brew install chafa`), then `vi
 12:37-12:28 | another dot | 60          # inverted range — auto-swaps to 12:28-12:37
 14:10 | robot arm | 60 | 20             # 60 frames before, 20 after
 18:36 | two moons
+2026-04-07 02:15 | next day event | 60  # per-line date overrides header
 ```
 
 Key behaviours:
 - Padding is in **frames** (not seconds); omit for zero padding
 - `HH:MM` timestamps cover the entire minute; `HH:MM:SS` targets the exact second
 - Multi-point `HH:MM, HH:MM` spans from the earliest to the latest timestamp
+- Per-line date: prefix any timestamp with `YYYY-MM-DD` to override the `# date:` header (useful for multi-day captures)
+- `--add-timestamp` / `--timestamp-tz` burn the capture time into each frame (same as `preview`)
 - Output: `$LIVELAPSE_DATA_DIR/output/extracts/<feed>/001_label.mp4`, `002_...`, etc.
 - `--compile` concatenates all fragments into `compilation.mp4` in the same directory
 
