@@ -105,6 +105,27 @@ artemis2-2nd     stopped  -        2026-04-06T01:44:12Z   562
 
 Snapshots the current frame list, stages symlinks in a temp dir, renders an MP4 with ffmpeg. Capture continues uninterrupted. Output lands in `$LIVELAPSE_DATA_DIR/output/intermediate/` by default. Prints output path, frame count, and playback duration on completion.
 
+### peek
+
+```bash
+./bin/livelapse peek <feed-name> > latest.webp    # Raw bytes to stdout — pipe or redirect
+./bin/livelapse peek <feed-name> | imgcat          # Pipe to an image viewer
+```
+
+Outputs the newest valid frame's raw bytes. Refuses to write binary to an interactive terminal — use `watch --once` to view inline instead.
+
+### watch
+
+```bash
+./bin/livelapse watch <feed-name>                  # Live refresh every 1s, Ctrl-C to stop
+./bin/livelapse watch <feed-name> --interval 5     # Refresh every 5s
+./bin/livelapse watch <feed-name> --once            # Show one frame and exit
+```
+
+Displays the latest captured frame inline in the terminal and refreshes automatically. For stopped feeds, shows the last valid frame before the stream dropped.
+
+Renderer detection: prefers `chafa` (install via `brew install chafa`), then `viu`, then Kitty/iTerm2 native inline images. Read-only — never touches capture processes or PIDs.
+
 ### caffeinate (macOS only)
 
 ```bash
@@ -122,12 +143,9 @@ Required for long local runs. Keep the lid open and machine on power.
 These commands are planned but not yet backed into `bin/livelapse`. Use the manual workflows below in the meantime.
 
 ```
-start [feed-name]         Launch one or all feeds
-stop [feed-name]          Stop one or all feeds
 stitch <name> [opts]      Assemble frames into a timelapse
 add <name> <url> [fps]    Add a feed and start immediately
 remove <name>             Stop and remove a feed
-peek <feed-name>          Output the most recent frame to stdout
 disk                      Disk usage per feed and total
 ```
 

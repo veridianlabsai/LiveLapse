@@ -65,6 +65,7 @@ install_darwin_dependencies() {
   command -v yt-dlp >/dev/null 2>&1 || packages+=(yt-dlp)
   command -v ffmpeg >/dev/null 2>&1 || packages+=(ffmpeg)
   command -v jq >/dev/null 2>&1 || packages+=(jq)
+  command -v chafa >/dev/null 2>&1 || packages+=(chafa)
 
   if [[ ${#packages[@]} -eq 0 ]]; then
     log "macOS dependencies already present: yt-dlp, ffmpeg, jq"
@@ -76,7 +77,7 @@ install_darwin_dependencies() {
 
 install_linux_dependencies() {
   run_as_root apt-get update
-  run_as_root apt-get install -y yt-dlp ffmpeg jq curl bc
+  run_as_root apt-get install -y yt-dlp ffmpeg jq curl bc chafa
 }
 
 deploy_systemd_template() {

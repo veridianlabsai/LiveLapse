@@ -973,24 +973,26 @@ iterm2_show_image() {
 }
 
 # Detect how we can display an image in this terminal.
-# Returns the method name: iterm2, chafa, viu, sixel, or "none".
+# Returns the method name: chafa, viu, iterm2, or "none".
+# Prefer chafa/viu over iTerm2 inline images — the iTerm2 protocol
+# triggers a permission dialog per image which breaks watch loops.
 detect_image_renderer() {
-  # iTerm2 sets this env var
-  if [[ "${TERM_PROGRAM:-}" == "iTerm.app" || "${LC_TERMINAL:-}" == "iTerm2" ]]; then
-    printf 'iterm2\n'
-    return 0
-  fi
-  # Kitty also supports the iTerm2 protocol
-  if [[ "${TERM:-}" == "xterm-kitty" ]]; then
-    printf 'iterm2\n'
-    return 0
-  fi
   if command -v chafa >/dev/null 2>&1; then
     printf 'chafa\n'
     return 0
   fi
   if command -v viu >/dev/null 2>&1; then
     printf 'viu\n'
+    return 0
+  fi
+  # Kitty supports inline images without a permission dialog
+  if [[ "${TERM:-}" == "xterm-kitty" ]]; then
+    printf 'iterm2\n'
+    return 0
+  fi
+  # iTerm2 — last resort due to the inline image permission prompt
+  if [[ "${TERM_PROGRAM:-}" == "iTerm.app" || "${LC_TERMINAL:-}" == "iTerm2" ]]; then
+    printf 'iterm2\n'
     return 0
   fi
   printf 'none\n'

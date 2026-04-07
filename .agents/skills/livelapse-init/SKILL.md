@@ -83,7 +83,7 @@ Run the installer:
 ./install.sh
 ```
 
-This installs `yt-dlp`, `ffmpeg`, `jq`, and `curl` via Homebrew (macOS) or apt (Linux), and on Linux also installs the systemd unit template and cron health check.
+This installs `yt-dlp`, `ffmpeg`, `jq`, `curl`, and `chafa` via Homebrew (macOS) or apt (Linux), and on Linux also installs the systemd unit template and cron health check.
 
 If the installer fails, show the user the error and suggest running it manually.
 

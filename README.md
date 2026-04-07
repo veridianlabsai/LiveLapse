@@ -60,7 +60,7 @@ Track seasonal change, plant or crop growth, or wildlife behavior from a remote 
 
 ## Quick Start
 
-**Requirements:** `yt-dlp`, `ffmpeg`, `jq`, `curl` (installed by `install.sh`)
+**Requirements:** `yt-dlp`, `ffmpeg`, `jq`, `curl` (installed by `install.sh`). Optional: `chafa` for inline terminal image display (`watch` command).
 
 ```bash
 # 1. Clone
@@ -273,7 +273,7 @@ Options: `--start` / `--end` (ISO 8601), `--playback-fps` (default 30), `--outpu
 
 | Feature | macOS | Linux (Ubuntu 24+) |
 |---|---|---|
-| Install deps | `brew install yt-dlp ffmpeg jq` | `apt install yt-dlp ffmpeg jq curl bc` |
+| Install deps | `brew install yt-dlp ffmpeg jq chafa` | `apt install yt-dlp ffmpeg jq curl bc chafa` |
 | Process management | Background process + PID file | systemd template units |
 | Logs | `.pids/<feed>.log` | `journalctl -u livelapse@<feed>` |
 | Health check | User crontab | `/etc/cron.d/livelapse` |
