@@ -47,6 +47,18 @@ print(os.path.realpath(sys.argv[1]))
 PY
 }
 
+run_livelapse_python_module() {
+  local module="$1"
+  shift
+
+  local pythonpath="$LIVELAPSE_ROOT"
+  if [[ -n "${PYTHONPATH:-}" ]]; then
+    pythonpath="${pythonpath}:$PYTHONPATH"
+  fi
+
+  PYTHONPATH="$pythonpath" python3 -m "$module" "$@"
+}
+
 load_env() {
   local env_file=""
 
@@ -95,44 +107,27 @@ resolved_data_dir() {
 }
 
 list_feed_records() {
-  awk -F'|' '
-    /^[[:space:]]*#/ { next }
-    /^[[:space:]]*$/ { next }
-    {
-      gsub(/^[[:space:]]+|[[:space:]]+$/, "", $1)
-      gsub(/^[[:space:]]+|[[:space:]]+$/, "", $2)
-      gsub(/^[[:space:]]+|[[:space:]]+$/, "", $3)
-      gsub(/^[[:space:]]+|[[:space:]]+$/, "", $4)
-      if ($1 == "" || $2 == "") {
-        next
-      }
-      if ($3 == "") {
-        $3 = "1"
-      }
-      print $1 "|" $2 "|" $3 "|" $4
-    }
-  ' "$LIVELAPSE_ROOT/feeds.conf"
+  run_livelapse_python_module \
+    livelapse.feed_config_cli \
+    list-records \
+    "$LIVELAPSE_ROOT/feeds.conf"
 }
 
 feed_record_by_name() {
   local target="$1"
 
-  list_feed_records | awk -F'|' -v target="$target" '
-    $1 == target {
-      print
-      found = 1
-      exit
-    }
-    END {
-      if (!found) {
-        exit 1
-      }
-    }
-  '
+  run_livelapse_python_module \
+    livelapse.feed_config_cli \
+    record-by-name \
+    "$LIVELAPSE_ROOT/feeds.conf" \
+    "$target"
 }
 
 list_feed_names() {
-  list_feed_records | cut -d'|' -f1
+  run_livelapse_python_module \
+    livelapse.feed_config_cli \
+    list-names \
+    "$LIVELAPSE_ROOT/feeds.conf"
 }
 
 validate_feed_name() {

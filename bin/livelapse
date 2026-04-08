@@ -33,7 +33,6 @@ DEFAULT_LOG_LINES=50
 DEFAULT_PREVIEW_FPS=30
 DEFAULT_TIMESTAMP_TZ="est"
 PREVIEW_STAGE_DIR=""
-PREVIEW_PROGRESS_INTERVAL=500
 STOP_WAIT_ATTEMPTS=50
 STOP_WAIT_INTERVAL_SECONDS=0.2
 LIFECYCLE_DRY_RUN="no"
@@ -1140,125 +1139,12 @@ generate_timestamp_subtitles() {
   local playback_fps="$3"
   local requested_tz="$4"
 
-  python3 - "$manifest_file" "$subtitles_file" "$playback_fps" "$requested_tz" <<'PY'
-from __future__ import annotations
-
-import sys
-from datetime import datetime, timezone
-from pathlib import Path
-from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
-
-
-def ass_time(seconds: float) -> str:
-    total_centis = int(round(seconds * 100))
-    hours, remainder = divmod(total_centis, 360000)
-    minutes, remainder = divmod(remainder, 6000)
-    secs, centis = divmod(remainder, 100)
-    return f"{hours}:{minutes:02d}:{secs:02d}.{centis:02d}"
-
-
-def ass_escape(text: str) -> str:
-    return text.replace("\\", r"\\").replace("{", r"\{").replace("}", r"\}")
-
-
-def resolve_timezone(requested: str) -> str:
-    aliases = {
-        "est": "America/New_York",
-        "edt": "America/New_York",
-        "et": "America/New_York",
-        "eastern": "America/New_York",
-        "pst": "America/Los_Angeles",
-        "pdt": "America/Los_Angeles",
-        "pt": "America/Los_Angeles",
-        "pacific": "America/Los_Angeles",
-        "cst": "America/Chicago",
-        "cdt": "America/Chicago",
-        "ct": "America/Chicago",
-        "mst": "America/Denver",
-        "mdt": "America/Denver",
-        "mt": "America/Denver",
-        "utc": "UTC",
-        "z": "UTC",
-    }
-    cleaned = requested.strip()
-    return aliases.get(cleaned.lower(), cleaned)
-
-
-manifest_path = Path(sys.argv[1])
-subtitles_path = Path(sys.argv[2])
-playback_fps = float(sys.argv[3])
-requested_tz = sys.argv[4]
-resolved_tz = resolve_timezone(requested_tz)
-
-try:
-    zone = ZoneInfo(resolved_tz)
-except ZoneInfoNotFoundError:
-    print(f"Unknown timezone: {requested_tz}", file=sys.stderr)
-    sys.exit(1)
-
-frame_paths = [line.strip() for line in manifest_path.read_text().splitlines() if line.strip()]
-if not frame_paths:
-    print("No frames available for timestamp subtitles", file=sys.stderr)
-    sys.exit(1)
-
-events: list[tuple[str, str, str]] = []
-first_label = ""
-
-for index, frame_path in enumerate(frame_paths):
-    frame_stem = Path(frame_path).stem
-    try:
-        captured_at_utc = datetime.strptime(frame_stem, "%Y-%m-%dT%H_%M_%SZ").replace(tzinfo=timezone.utc)
-    except ValueError:
-        print(f"Could not parse frame timestamp from {frame_path}", file=sys.stderr)
-        sys.exit(1)
-
-    captured_at_local = captured_at_utc.astimezone(zone)
-    label = captured_at_local.strftime("%Y-%m-%d %H:%M:%S %Z")
-    if not first_label:
-        first_label = label
-
-    start_time = ass_time(index / playback_fps)
-    end_time = ass_time((index + 1) / playback_fps)
-    events.append((start_time, end_time, ass_escape(label)))
-
-header = """[Script Info]
-ScriptType: v4.00+
-WrapStyle: 0
-ScaledBorderAndShadow: yes
-PlayResX: 1920
-PlayResY: 1080
-
-[V4+ Styles]
-Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: Timestamp,Arial,28,&H00FFFFFF,&H000000FF,&H00202020,&H00000000,0,0,0,0,100,100,0,0,1,2,0,3,24,24,24,1
-
-[Events]
-Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
-"""
-
-with subtitles_path.open("w", encoding="utf-8") as handle:
-    handle.write(header)
-    for start_time, end_time, label in events:
-        handle.write(f"Dialogue: 0,{start_time},{end_time},Timestamp,,0,0,0,,{label}\n")
-
-print(f"{resolved_tz}|{first_label}")
-PY
-}
-
-preview_progress_interval() {
-  local total_frames="$1"
-
-  if (( total_frames <= 200 )); then
-    printf '50\n'
-    return 0
-  fi
-
-  if (( total_frames <= 1000 )); then
-    printf '100\n'
-    return 0
-  fi
-
-  printf '%s\n' "$PREVIEW_PROGRESS_INTERVAL"
+  run_livelapse_python_module \
+    livelapse.generate_timestamp_subtitles \
+    "$manifest_file" \
+    "$subtitles_file" \
+    "$playback_fps" \
+    "$requested_tz"
 }
 
 preview_command() {
@@ -1351,31 +1237,31 @@ preview_command() {
   log "Output: $output_path"
   log "Scanning frame list (*.$frame_ext)"
 
-  find "$source_dir" -maxdepth 1 -type f -name "*.${frame_ext}" | LC_ALL=C sort > "$manifest_file"
-
-  local total_frames progress_interval
-  total_frames="$(wc -l < "$manifest_file" | tr -d '[:space:]')"
+  local total_frames
+  total_frames="$(
+    run_livelapse_python_module \
+      livelapse.index_frames_cli \
+      "$source_dir" \
+      "$frame_ext" \
+      "$manifest_file"
+  )"
 
   if [[ -z "$total_frames" || "$total_frames" == "0" ]]; then
     log "No .$frame_ext frames found for $feed_name in $source_dir"
     return 1
   fi
 
-  progress_interval="$(preview_progress_interval "$total_frames")"
   log "Found $total_frames frame(s); staging under $stage_dir"
 
-  local count=0
-  while IFS= read -r frame_path; do
-    local target_path
-    [[ -n "$frame_path" ]] || continue
-    count=$((count + 1))
-    printf -v target_path '%s/%06d.%s' "$stage_dir" "$count" "$frame_ext"
-    ln -s "$frame_path" "$target_path"
-
-    if (( count % progress_interval == 0 )) || (( count == total_frames )); then
-      log "Staged $count/$total_frames frame(s)"
-    fi
-  done < "$manifest_file"
+  local count
+  count="$(
+    run_livelapse_python_module \
+      livelapse.stage_frame_links_cli \
+      "$manifest_file" \
+      "$stage_dir" \
+      "$frame_ext"
+  )"
+  log "Staged $count/$total_frames frame(s)"
 
   local video_filter subtitle_file resolved_timestamp_tz first_overlay_label overlay_info
   video_filter='pad=ceil(iw/2)*2:ceil(ih/2)*2'
@@ -1454,14 +1340,14 @@ render_extract_fragment() {
   local timestamp_tz="${7:-$DEFAULT_TIMESTAMP_TZ}"
   local fragment_label="${8:-fragment}"
 
-  local count=0
-  while IFS= read -r frame_path; do
-    [[ -n "$frame_path" ]] || continue
-    count=$((count + 1))
-    local target_path
-    printf -v target_path '%s/%06d.%s' "$frag_stage_dir" "$count" "$frame_ext"
-    ln -s "$frame_path" "$target_path"
-  done < "$frag_manifest"
+  local count
+  count="$(
+    run_livelapse_python_module \
+      livelapse.stage_frame_links_cli \
+      "$frag_manifest" \
+      "$frag_stage_dir" \
+      "$frame_ext"
+  )"
 
   if (( count == 0 )); then
     return 1
@@ -1627,29 +1513,26 @@ extract_command() {
 
   # Extract manifest headers: # feed:, # date:, and # timezone:
   if [[ -n "$manifest_file" ]]; then
-    local header_val=""
-    if [[ -z "$feed_name" ]]; then
-      header_val="$(grep -m1 '^[[:space:]]*#[[:space:]]*feed:' "$manifest_file" | sed 's/^[[:space:]]*#[[:space:]]*feed:[[:space:]]*//' | tr -d '[:space:]')" || true
-      if [[ -n "$header_val" ]]; then
-        feed_name="$header_val"
-      fi
-    fi
-    if [[ -z "$extract_date" ]]; then
-      header_val="$(grep -m1 '^[[:space:]]*#[[:space:]]*date:' "$manifest_file" | sed 's/^[[:space:]]*#[[:space:]]*date:[[:space:]]*//' | tr -d '[:space:]')" || true
-      if [[ -n "$header_val" ]]; then
-        extract_date="$header_val"
-      fi
-    fi
-    if [[ "$manifest_tz_explicit" == "no" ]]; then
-      header_val="$(
-        grep -E -m1 '^[[:space:]]*#[[:space:]]*(timezone|manifest-tz):' "$manifest_file" \
-          | sed -E 's/^[[:space:]]*#[[:space:]]*(timezone|manifest-tz):[[:space:]]*//' \
-          | tr -d '[:space:]'
-      )" || true
-      if [[ -n "$header_val" ]]; then
-        manifest_tz="$header_val"
-      fi
-    fi
+    local header_key header_val
+    while IFS='=' read -r header_key header_val; do
+      case "$header_key" in
+        feed)
+          if [[ -z "$feed_name" && -n "$header_val" ]]; then
+            feed_name="$header_val"
+          fi
+          ;;
+        date)
+          if [[ -z "$extract_date" && -n "$header_val" ]]; then
+            extract_date="$header_val"
+          fi
+          ;;
+        manifest_tz)
+          if [[ "$manifest_tz_explicit" == "no" && -n "$header_val" ]]; then
+            manifest_tz="$header_val"
+          fi
+          ;;
+      esac
+    done < <(run_livelapse_python_module livelapse.manifest_headers_cli "$manifest_file")
   fi
 
   if [[ -z "$feed_name" ]]; then
@@ -1705,10 +1588,14 @@ extract_command() {
 
   # Build master frame list
   local all_frames_file="$stage_dir/all_frames.txt"
-  find "$source_dir" -maxdepth 1 -type f -name "*.${frame_ext}" | LC_ALL=C sort > "$all_frames_file"
-
   local total_frames
-  total_frames="$(wc -l < "$all_frames_file" | tr -d '[:space:]')"
+  total_frames="$(
+    run_livelapse_python_module \
+      livelapse.index_frames_cli \
+      "$source_dir" \
+      "$frame_ext" \
+      "$all_frames_file"
+  )"
 
   if [[ -z "$total_frames" || "$total_frames" == "0" ]]; then
     log "No .$frame_ext frames found for $feed_name in $source_dir"
@@ -1725,226 +1612,16 @@ extract_command() {
   fi
 
   # Parse manifest and select frames per fragment
-  python3 - "$all_frames_file" "$stage_dir" "$extract_date" "$pad_left" "$pad_right" "$fragment_start" "$manifest_input" "$manifest_tz" <<'PYEOF'
-from __future__ import annotations
-
-import bisect
-import re
-import sys
-from datetime import datetime, timedelta, timezone
-from pathlib import Path
-from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
-
-
-def slugify(text: str) -> str:
-    slug = re.sub(r'[^a-z0-9]+', '-', text.lower().strip())
-    return re.sub(r'-+', '-', slug).strip('-')[:60] or 'fragment'
-
-
-def resolve_timezone(requested: str) -> str:
-    aliases = {
-        "est": "America/New_York",
-        "edt": "America/New_York",
-        "et": "America/New_York",
-        "eastern": "America/New_York",
-        "pst": "America/Los_Angeles",
-        "pdt": "America/Los_Angeles",
-        "pt": "America/Los_Angeles",
-        "pacific": "America/Los_Angeles",
-        "cst": "America/Chicago",
-        "cdt": "America/Chicago",
-        "ct": "America/Chicago",
-        "mst": "America/Denver",
-        "mdt": "America/Denver",
-        "mt": "America/Denver",
-        "utc": "UTC",
-        "z": "UTC",
-    }
-    cleaned = requested.strip()
-    return aliases.get(cleaned.lower(), cleaned)
-
-
-def parse_time(raw: str, date_prefix: str, manifest_zone: ZoneInfo) -> datetime:
-    t = raw.strip()
-    # Full ISO: 2026-04-06T09:07:00Z or 2026-04-06T09_07_00Z
-    if 'T' in t and len(t) > 10:
-        t_norm = t.replace('_', ':').rstrip('Z')
-        for fmt in ('%Y-%m-%dT%H:%M:%S', '%Y-%m-%dT%H:%M'):
-            try:
-                return datetime.strptime(t_norm, fmt).replace(tzinfo=timezone.utc)
-            except ValueError:
-                continue
-    # HH:MM:SS
-    if re.match(r'^\d{1,2}:\d{2}:\d{2}$', t):
-        if not date_prefix:
-            print(f'--date required for short timestamp: {t}', file=sys.stderr)
-            sys.exit(1)
-        parts = t.split(':')
-        h = parts[0].zfill(2)
-        local_dt = datetime.strptime(
-            f'{date_prefix}T{h}:{parts[1]}:{parts[2]}', '%Y-%m-%dT%H:%M:%S'
-        ).replace(tzinfo=manifest_zone)
-        return local_dt.astimezone(timezone.utc)
-    # HH:MM
-    if re.match(r'^\d{1,2}:\d{2}$', t):
-        if not date_prefix:
-            print(f'--date required for short timestamp: {t}', file=sys.stderr)
-            sys.exit(1)
-        parts = t.split(':')
-        h = parts[0].zfill(2)
-        local_dt = datetime.strptime(
-            f'{date_prefix}T{h}:{parts[1]}:00', '%Y-%m-%dT%H:%M:%S'
-        ).replace(tzinfo=manifest_zone)
-        return local_dt.astimezone(timezone.utc)
-    print(f'Cannot parse timestamp: {t}', file=sys.stderr)
-    sys.exit(1)
-
-
-def has_seconds(raw: str) -> bool:
-    return len(raw.strip().split(':')) >= 3
-
-
-def parse_spec(spec: str, date_prefix: str, manifest_zone: ZoneInfo) -> tuple[datetime, datetime]:
-    spec = spec.strip()
-    # Range: HH:MM-HH:MM or HH:MM:SS-HH:MM:SS
-    m = re.match(
-        r'^(\d{1,2}:\d{2}(?::\d{2})?)\s*-\s*(\d{1,2}:\d{2}(?::\d{2})?)$', spec
-    )
-    if m:
-        s = parse_time(m.group(1), date_prefix, manifest_zone)
-        e = parse_time(m.group(2), date_prefix, manifest_zone)
-        if e < s:
-            s, e = e, s
-        if not has_seconds(m.group(2)):
-            e += timedelta(seconds=59)
-        return s, e
-    # Multi-point: comma-separated
-    if ',' in spec:
-        raw_parts = [p.strip() for p in spec.split(',')]
-        windows = []
-        for raw in raw_parts:
-            t = parse_time(raw, date_prefix, manifest_zone)
-            if has_seconds(raw):
-                windows.append((t, t))
-            else:
-                windows.append((t, t + timedelta(seconds=59)))
-        return min(w[0] for w in windows), max(w[1] for w in windows)
-    # Single timestamp
-    s = parse_time(spec, date_prefix, manifest_zone)
-    if has_seconds(spec):
-        return s, s
-    return s, s + timedelta(seconds=59)
-
-
-# --- Main ---
-
-all_frames_file = Path(sys.argv[1])
-stage_dir = Path(sys.argv[2])
-date_prefix = sys.argv[3]
-default_pl = int(sys.argv[4])
-default_pr = int(sys.argv[5])
-frag_start = int(sys.argv[6])
-manifest_path = Path(sys.argv[7])
-manifest_tz_requested = sys.argv[8]
-
-resolved_manifest_tz = resolve_timezone(manifest_tz_requested)
-try:
-    manifest_zone = ZoneInfo(resolved_manifest_tz)
-except ZoneInfoNotFoundError:
-    print(f'Unknown manifest timezone: {manifest_tz_requested}', file=sys.stderr)
-    sys.exit(1)
-
-# Load sorted frame list and parse timestamps from filenames
-frames: list[tuple[datetime, str]] = []
-for line in all_frames_file.read_text().splitlines():
-    line = line.strip()
-    if not line:
-        continue
-    stem = Path(line).stem
-    try:
-        dt = datetime.strptime(stem, '%Y-%m-%dT%H_%M_%SZ').replace(tzinfo=timezone.utc)
-        frames.append((dt, line))
-    except ValueError:
-        continue
-
-if not frames:
-    print('No parseable frames found', file=sys.stderr)
-    sys.exit(1)
-
-frame_dts = [f[0] for f in frames]
-
-# Parse manifest
-LINE_DATE_RE = re.compile(r'^(\d{4}-\d{2}-\d{2})\s+(.*)')
-
-entries: list[tuple[datetime, datetime, str, int, int]] = []
-for line in manifest_path.read_text().splitlines():
-    line = line.strip()
-    if not line or line.startswith('#'):
-        continue
-    parts = [p.strip() for p in line.split('|')]
-    ts = parts[0]
-    # Per-line date override: "2026-04-07 12:03-12:20" extracts the date
-    line_date = date_prefix
-    m = LINE_DATE_RE.match(ts)
-    if m:
-        line_date = m.group(1)
-        ts = m.group(2)
-    label = parts[1] if len(parts) > 1 and parts[1] else ts
-    if len(parts) > 2 and parts[2]:
-        pl = int(parts[2])
-        pr = int(parts[3]) if len(parts) > 3 and parts[3] else pl
-    else:
-        pl = default_pl
-        pr = default_pr
-    start, end = parse_spec(ts, line_date, manifest_zone)
-    entries.append((start, end, label, pl, pr))
-
-if not entries:
-    print('No entries found in manifest', file=sys.stderr)
-    sys.exit(1)
-
-# Select frames per entry
-meta: list[str] = []
-for i, (start, end, label, pl, pr) in enumerate(entries):
-    frag_num = frag_start + i
-    si = bisect.bisect_left(frame_dts, start)
-    ei = bisect.bisect_right(frame_dts, end)
-    core_count = ei - si
-    if core_count == 0:
-        print(
-            f'Warning: no frames for fragment {frag_num:03d} ({label}): '
-            f'{start.isoformat()} to {end.isoformat()}',
-            file=sys.stderr,
-        )
-        continue
-    ps = max(0, si - pl)
-    pe = min(len(frames), ei + pr)
-    selected = [frames[j][1] for j in range(ps, pe)]
-    frag_file = stage_dir / f'frag_{frag_num:03d}.txt'
-    frag_file.write_text('\n'.join(selected) + '\n')
-    meta.append(
-        '|'.join(
-            [
-                f'{frag_num:03d}',
-                slugify(label),
-                str(len(selected)),
-                label,
-                start.isoformat(),
-                end.isoformat(),
-                frames[si][0].isoformat(),
-                frames[ei - 1][0].isoformat(),
-                frames[ps][0].isoformat(),
-                frames[pe - 1][0].isoformat(),
-                str(pl),
-                str(pr),
-            ]
-        )
-    )
-
-summary = stage_dir / 'fragments.txt'
-summary.write_text('\n'.join(meta) + '\n')
-print(f'Prepared {len(meta)} fragment(s) from {len(entries)} entries', file=sys.stderr)
-PYEOF
+  run_livelapse_python_module \
+    livelapse.prepare_extract_fragments \
+    "$all_frames_file" \
+    "$stage_dir" \
+    "$extract_date" \
+    "$pad_left" \
+    "$pad_right" \
+    "$fragment_start" \
+    "$manifest_input" \
+    "$manifest_tz"
 
   # Read fragments summary and render each
   local fragments_file="$stage_dir/fragments.txt"
